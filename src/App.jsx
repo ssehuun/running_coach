@@ -1,361 +1,21 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import {
+  DIST_M, timeToVDOT, vdotToTime, vdotToVelocity, trainingPaces,
+  timeToSec, fmtTime, fmtPace, DIST_OPTIONS, TARGET_OPTIONS,
+  LEVELS, levelOf, levelRangeLabel, levelRaceLabel, PACE_META, buildWeeklySchedule,
+} from "./calc.js";
+import {
+  Phone, StatusBar, VdotGauge, ACCENT, kindStyle, inputStyle, colonStyle, labelStyle,
+} from "./ui.jsx";
+import { useLocalState } from "./useLocalState.js";
+import { KEYS, loadPlan, savePlan, clearPlan, newId } from "./storage.js";
+import { recordsForDay, planDateFor, toISODate } from "./compare.js";
+import { LogScreen, HistoryScreen, CompareScreen } from "./screens.jsx";
 
 /* ============================================================
-   VDOT 러닝 코치 앱 — Daniels-Gilbert 공식 직접 구현 버전
+   VDOT 러닝 코치 앱 — Daniels-Gilbert 공식 기반
+   계산/저장/비교/신규 화면은 별도 모듈로 분리(calc·storage·compare·screens)
    ============================================================ */
-
-const DIST_M = { k5: 5000, k10: 10000, half: 21097.5, full: 42195 };
-
-/* ---- Daniels-Gilbert 공식 ----
-   velocity v (m/min) = dist / time(min)
-   VO2 = -4.60 + 0.182258*v + 0.000104*v^2
-   pct = 0.8 + 0.1894393*e^(-0.012778*t) + 0.2989558*e^(-0.1932605*t)   (t in min)
-   VDOT = VO2 / pct
-*/
-function timeToVDOT(distM, totalSec) {
-  const tMin = totalSec / 60;
-  const v = distM / tMin;
-  const vo2 = -4.60 + 0.182258 * v + 0.000104 * v * v;
-  const pct = 0.8 + 0.1894393 * Math.exp(-0.012778 * tMin)
-    + 0.2989558 * Math.exp(-0.1932605 * tMin);
-  return vo2 / pct;
-}
-
-/* VDOT + 거리 → 예상 기록(초). 속도를 역산 (이분법) */
-function vdotToTime(vdot, distM) {
-  // 주어진 vdot에서 distM를 달리는 시간을 찾는다
-  let lo = 60, hi = 60 * 600; // 1분 ~ 10시간(초)
-  for (let i = 0; i < 60; i++) {
-    const mid = (lo + hi) / 2;
-    const est = timeToVDOT(distM, mid);
-    if (est > vdot) lo = mid; else hi = mid;
-  }
-  return (lo + hi) / 2;
-}
-
-/* VDOT → vVO2max 속도(m/min) 근사: VO2 = vdot 일 때의 v */
-function vdotToVelocity(vdot) {
-  // -4.60 + 0.182258 v + 0.000104 v^2 = vdot  → 근의 공식
-  const a = 0.000104, b = 0.182258, c = -4.60 - vdot;
-  return (-b + Math.sqrt(b * b - 4 * a * c)) / (2 * a); // m/min
-}
-
-/* 훈련 페이스(초/km) — Daniels %vVO2max 기준 */
-function trainingPaces(vdot) {
-  const vv = vdotToVelocity(vdot); // m/min @ 100% vVO2max
-  const paceFromPct = (pct) => {
-    const v = vv * pct;          // m/min
-    return 1000 / v * 60;        // sec per km
-  };
-  return {
-    easy: paceFromPct(0.68),       // E: 59-74%, 대표 ~68%
-    marathon: vdotToTime(vdot, 42195) / 42.195, // M: 풀 예상페이스
-    threshold: paceFromPct(0.88),  // T: ~88%
-    interval: paceFromPct(0.975),  // I: ~97.5-100%
-    rep: paceFromPct(1.05),        // R: 105%+
-  };
-}
-
-function timeToSec(h, m, s) {
-  return (parseInt(h || 0) * 3600) + (parseInt(m || 0) * 60) + parseInt(s || 0);
-}
-function fmtTime(sec) {
-  sec = Math.round(sec);
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-function fmtPace(secPerKm) {
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-function addPace(secPerKm, delta) { return secPerKm + delta; }
-
-const DIST_OPTIONS = [
-  { key: "k5", label: "5K", emoji: "⚡" },
-  { key: "k10", label: "10K", emoji: "🏃" },
-  { key: "half", label: "하프", emoji: "🎽" },
-  { key: "full", label: "풀코스", emoji: "🏅" },
-];
-const TARGET_OPTIONS = [
-  { key: "k10", label: "10K", dist: "10km", weeks: 12 },
-  { key: "half", label: "하프", dist: "21.1km", weeks: 16 },
-  { key: "full", label: "풀코스", dist: "42.2km", weeks: 21 },
-];
-
-const ACCENT = "#22d3ee";
-const BG = "#0a0e17";
-
-/* ====================== VDOT 등급 밴드 (앱 자체 기준) ======================
-   게이지 / 등급표 / 배지가 모두 이 한 소스를 공유한다. */
-const LEVELS = [
-  { key: "beginner", name: "입문", min: 0, max: 42, c: "#60a5fa" },
-  { key: "inter", name: "중급", min: 42, max: 48, c: "#34d399" },
-  { key: "upper", name: "중상급", min: 48, max: 54, c: "#fb923c" },
-  { key: "adv", name: "상급", min: 54, max: 999, c: "#f43f5e" },
-];
-const GAUGE_MIN = 30, GAUGE_MAX = 66;
-
-function levelOf(vdot) {
-  return LEVELS.find(l => vdot >= l.min && vdot < l.max) || LEVELS[LEVELS.length - 1];
-}
-/* 등급 경계를 VDOT 범위 문자열로 ("< 42", "42–48", "54+") */
-function levelRangeLabel(l) {
-  if (l.min === 0) return `< ${l.max}`;
-  if (l.max >= 999) return `${l.min}+`;
-  return `${l.min}–${l.max}`;
-}
-/* 등급을 체감 가능한 실제 기록(기본 10K)으로 환산 */
-function levelRaceLabel(l, distM = 10000) {
-  const fast = l.max < 999 ? fmtTime(vdotToTime(l.max, distM)) : null;
-  const slow = l.min > 0 ? fmtTime(vdotToTime(l.min, distM)) : null;
-  if (!slow) return `10K ${fast} 이내`;   // 상급
-  if (!fast) return `10K ${slow}+`;        // 입문
-  return `10K ${fast}–${slow}`;
-}
-
-/* ====================== 훈련 페이스 메타데이터 ======================
-   range: Daniels 권장 강도 범위(참고). pct 막대/숫자는 실제 페이스에서 역산. */
-const PACE_META = [
-  {
-    key: "easy", n: "Easy 이지", c: "#60a5fa", range: "59–74%",
-    purpose: "유산소 기반·모세혈관·미토콘드리아 발달, 회복 촉진",
-    feel: "옆사람과 편하게 대화할 수 있는 강도",
-    when: "회복일·롱런 등 주간 주행량의 대부분",
-  },
-  {
-    key: "marathon", n: "Marathon 마라톤", c: "#f43f5e", range: null,
-    purpose: "글리코겐 효율·레이스 페이스 적응",
-    feel: "편안하지만 집중이 필요한 강도",
-    when: "특화기 롱런 후반·마라톤 페이스 주법",
-  },
-  {
-    key: "threshold", n: "Threshold 템포", c: "#fb923c", range: "~88%",
-    purpose: "젖산역치 향상 — 빠른 페이스를 더 오래 유지",
-    feel: "짧은 문장만 겨우 나오는 '편안하게 힘든' 강도",
-    when: "주 1회 템포런·크루즈 인터벌",
-  },
-  {
-    key: "interval", n: "Interval 인터벌", c: "#facc15", range: "97–100%",
-    purpose: "VO₂max 자극 — 최대 산소섭취 능력 향상",
-    feel: "말하기 거의 불가, 3–5분 반복 후 휴식",
-    when: "특화기 주 1회 (예: 1km 반복)",
-  },
-  {
-    key: "rep", n: "Repetition 레프", c: "#a78bfa", range: "105%+",
-    purpose: "무산소 파워·러닝 이코노미·스피드/폼 개선",
-    feel: "전력에 가까움, 짧고 충분한 휴식",
-    when: "스피드 보강 (예: 200–400m 반복)",
-  },
-];
-
-/* ====================== 주차별 스케줄 생성기 ====================== */
-function buildWeeklySchedule({ targetDist, vdot, paces, weeksLeft, startKm, raceDate, runDays = 5 }) {
-  const peakKm = targetDist === "full" ? 65 : targetDist === "half" ? 50 : 40;
-  const longMax = targetDist === "full" ? 32 : targetDist === "half" ? 24 : 18;
-
-  // 페이즈 경계 (비율)
-  const pBase = Math.round(weeksLeft * 0.30);
-  const pThresh = Math.round(weeksLeft * 0.30);
-  const pSpec = Math.round(weeksLeft * 0.25);
-  const pTaper = weeksLeft - pBase - pThresh - pSpec;
-
-  const phaseOf = (w) => {
-    if (w <= pBase) return { name: "베이스", c: "#34d399", idx: 0 };
-    if (w <= pBase + pThresh) return { name: "역치", c: "#fb923c", idx: 1 };
-    if (w <= pBase + pThresh + pSpec) return { name: "특화", c: "#f43f5e", idx: 2 };
-    return { name: "테이퍼", c: "#818cf8", idx: 3 };
-  };
-
-  const weeks = [];
-  for (let w = 1; w <= weeksLeft; w++) {
-    const ph = phaseOf(w);
-    const wkInRace = weeksLeft - w; // 남은 주
-    // 주간 거리: 베이스에서 점진 증가, 특화에서 피크, 테이퍼에서 급감
-    let vol;
-    if (ph.idx === 0) {
-      vol = startKm + (peakKm - startKm) * (w / Math.max(1, pBase)) * 0.55;
-    } else if (ph.idx === 1) {
-      const t = (w - pBase) / Math.max(1, pThresh);
-      vol = startKm + (peakKm - startKm) * (0.55 + 0.30 * t);
-    } else if (ph.idx === 2) {
-      vol = peakKm * (0.95 + 0.05 * Math.sin(w)); // 피크 부근 변동
-    } else {
-      const t = (w - (pBase + pThresh + pSpec)) / Math.max(1, pTaper);
-      vol = peakKm * (0.7 - 0.45 * t);
-    }
-    // 회복주(4주마다) 살짝 감량
-    if (ph.idx < 2 && w % 4 === 0) vol *= 0.8;
-    vol = Math.round(vol * runDays / 5); // 주당 훈련 일수에 비례해 총 주행량 조정
-
-    // 롱런 거리
-    let longRun;
-    if (ph.idx === 0) longRun = Math.min(longMax - 6, 14 + w);
-    else if (ph.idx === 1) longRun = Math.min(longMax - 2, 18 + (w - pBase));
-    else if (ph.idx === 2) longRun = longMax;
-    else longRun = Math.max(8, Math.round(longMax * 0.5));
-    if (w === weeksLeft) longRun = DIST_M[targetDist] / 1000; // 레이스 주
-
-    const isRaceWeek = w === weeksLeft;
-    const isRecovery = ph.idx < 2 && w % 4 === 0;
-
-    // 요일 구성
-    let days;
-    if (isRaceWeek) {
-      days = [
-        { d: "월", t: "휴식", k: 0, kind: "rest" },
-        { d: "화", t: `짧은 인터벌 ${fmtPace(paces.interval)} · 1km×2`, k: 6, kind: "speed" },
-        { d: "수", t: `이지 ${fmtPace(paces.easy)}`, k: 5, kind: "easy" },
-        { d: "목", t: `레이스 페이스 확인 ${fmtPace(paces.marathon)} · 3km`, k: 6, kind: "tempo" },
-        { d: "금", t: "완전 휴식", k: 0, kind: "rest" },
-        { d: "토", t: "D-1 가벼운 조깅 3km", k: 3, kind: "easy" },
-        { d: "일", t: `🏁 레이스 ${TARGET_OPTIONS.find(t => t.key === targetDist).label}`, k: Math.round(DIST_M[targetDist] / 1000), kind: "race" },
-      ];
-    } else {
-      // 페이즈별 핵심 훈련
-      const speedWork = ph.idx === 0
-        ? `인터벌 ${fmtPace(paces.interval)} · 1km×${4 + Math.min(2, w)}`
-        : ph.idx === 1
-        ? `인터벌 ${fmtPace(paces.interval)} · 1.2km×6`
-        : `VO₂ 인터벌 ${fmtPace(paces.interval)} · 1.2km×${ph.idx === 2 ? 6 : 5}`;
-      const tempoWork = ph.idx === 0
-        ? `이지 ${fmtPace(paces.easy)}`
-        : ph.idx === 1
-        ? `템포 ${fmtPace(paces.threshold)} · ${6 + (w - pBase)}km`
-        : `마라톤페이스 ${fmtPace(paces.marathon)} · ${10}km`;
-      const longDetail = ph.idx >= 1
-        ? `롱런 ${longRun}km (후반 ${Math.round(longRun * 0.3)}km @ ${fmtPace(paces.marathon)})`
-        : `롱런 ${longRun}km @ ${fmtPace(addPace(paces.marathon, 35))}`;
-
-      days = [
-        { d: "월", t: isRecovery ? "휴식 (회복주)" : "휴식 / 코어", k: 0, kind: "rest" },
-        { d: "화", t: speedWork, k: ph.idx === 0 ? 9 : 11, kind: "speed", time: "저녁" },
-        { d: "수", t: `이지 ${fmtPace(paces.easy)}`, k: ph.idx === 0 ? 7 : 8, kind: "easy", time: "자유" },
-        { d: "목", t: tempoWork, k: ph.idx === 0 ? 7 : 13, kind: ph.idx === 0 ? "easy" : "tempo", time: "저녁" },
-        { d: "금", t: "휴식", k: 0, kind: "rest" },
-        { d: "토", t: longDetail, k: longRun, kind: "long", time: "새벽" },
-        { d: "일", t: `리커버리 ${fmtPace(addPace(paces.easy, 30))}`, k: ph.idx === 0 ? 6 : 7, kind: "easy", time: "자유" },
-      ];
-    }
-
-    // 주당 훈련 일수에 맞춰 요일 조정 (롱런·핵심 훈련 우선 보존, 레이스 주는 그대로)
-    if (!isRaceWeek) {
-      const activePlan = {
-        3: ["화", "목", "토"],            // 인터벌 · 템포 · 롱런
-        4: ["화", "수", "목", "토"],       // + 이지
-        5: ["화", "수", "목", "토", "일"],  // + 리커버리 (기본)
-        6: ["화", "수", "목", "금", "토", "일"], // + 이지(금)
-      }[runDays] || ["화", "수", "목", "토", "일"];
-      const active = new Set(activePlan);
-      days = days.map(day => {
-        if (day.d === "금" && active.has("금"))
-          return { d: "금", t: `이지 ${fmtPace(paces.easy)}`, k: 6, kind: "easy", time: "자유" };
-        if (day.k > 0 && !active.has(day.d))
-          return { d: day.d, t: isRecovery ? "휴식 (회복주)" : "휴식", k: 0, kind: "rest" };
-        return day;
-      });
-    }
-
-    // 날짜 라벨
-    let dateLabel = "";
-    if (raceDate) {
-      const d = new Date(raceDate);
-      d.setDate(d.getDate() - wkInRace * 7);
-      dateLabel = `${d.getMonth() + 1}/${d.getDate()}`;
-    }
-
-    weeks.push({ w, phase: ph, vol, longRun, days, isRaceWeek, isRecovery, dateLabel, dMinus: wkInRace });
-  }
-  return { weeks, phases: { pBase, pThresh, pSpec, pTaper, peakKm } };
-}
-
-const kindStyle = {
-  rest: { c: "#64748b", bg: "rgba(100,116,139,0.12)" },
-  easy: { c: "#60a5fa", bg: "rgba(96,165,250,0.1)" },
-  speed: { c: "#facc15", bg: "rgba(250,204,21,0.1)" },
-  tempo: { c: "#fb923c", bg: "rgba(251,146,60,0.1)" },
-  long: { c: "#f43f5e", bg: "rgba(244,63,94,0.1)" },
-  race: { c: "#22d3ee", bg: "rgba(34,211,238,0.15)" },
-};
-
-const inputStyle = {
-  width: "100%", textAlign: "center", padding: "16px 0",
-  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: 12, color: "#fff", fontSize: 24, fontWeight: 800,
-  fontVariantNumeric: "tabular-nums", outline: "none",
-};
-const colonStyle = { fontSize: 22, fontWeight: 800, color: "#475569" };
-const labelStyle = {
-  display: "block", fontSize: 12, fontWeight: 700, color: "#64748b",
-  marginBottom: 10, letterSpacing: "0.02em",
-};
-
-/* 안정적인 참조를 위해 컴포넌트는 모듈 스코프에 정의
-   (App 내부에 정의하면 매 렌더마다 새 함수가 되어 input이 리마운트되고 상태가 사라짐) */
-function Phone({ children }) {
-  return (
-    <div style={{
-      maxWidth: 390, margin: "0 auto", minHeight: "100vh", background: BG, color: "#e2e8f0",
-      fontFamily: "'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif", position: "relative",
-    }}>{children}</div>
-  );
-}
-function StatusBar({ title, onBack }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 12, padding: "18px 20px 14px",
-      borderBottom: "1px solid rgba(255,255,255,0.05)", position: "sticky", top: 0,
-      background: BG, zIndex: 10,
-    }}>
-      {onBack && <button onClick={onBack} style={{
-        background: "rgba(255,255,255,0.06)", border: "none", color: "#94a3b8",
-        width: 32, height: 32, borderRadius: 10, cursor: "pointer", fontSize: 16,
-      }}>←</button>}
-      <span style={{ fontSize: 16, fontWeight: 800 }}>{title}</span>
-    </div>
-  );
-}
-
-/* VDOT 스케일 게이지: 등급 밴드 위에 사용자 위치를 마커로 표시 */
-function VdotGauge({ vdot }) {
-  const cur = levelOf(vdot);
-  const toPct = (v) => Math.max(0, Math.min(1, (v - GAUGE_MIN) / (GAUGE_MAX - GAUGE_MIN)));
-  const pos = toPct(vdot);
-  return (
-    <div style={{ padding: "6px 24px 2px" }}>
-      {/* 마커 (아래를 가리킴) */}
-      <div style={{ position: "relative", height: 16 }}>
-        <div style={{
-          position: "absolute", left: `${pos * 100}%`, transform: "translateX(-50%)",
-          fontSize: 11, color: "#fff", lineHeight: 1,
-        }}>▼</div>
-      </div>
-      {/* 밴드 막대 */}
-      <div style={{ display: "flex", height: 10, borderRadius: 6, overflow: "hidden" }}>
-        {LEVELS.map(l => {
-          const w = (toPct(Math.min(l.max, GAUGE_MAX)) - toPct(Math.max(l.min, GAUGE_MIN))) * 100;
-          return <div key={l.key} style={{
-            width: `${w}%`, background: l.c, opacity: cur.key === l.key ? 1 : 0.4,
-          }} />;
-        })}
-      </div>
-      {/* 밴드 라벨 */}
-      <div style={{ display: "flex", marginTop: 6 }}>
-        {LEVELS.map(l => {
-          const w = (toPct(Math.min(l.max, GAUGE_MAX)) - toPct(Math.max(l.min, GAUGE_MIN))) * 100;
-          return <div key={l.key} style={{
-            width: `${w}%`, textAlign: "center", fontSize: 10,
-            fontWeight: cur.key === l.key ? 800 : 600,
-            color: cur.key === l.key ? l.c : "#475569",
-          }}>{l.name}</div>;
-        })}
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const [screen, setScreen] = useState("input");
@@ -377,11 +37,105 @@ export default function App() {
   const [expandedPace, setExpandedPace] = useState(null);
   const [runDays, setRunDays] = useState(5);
 
+  // 영속 상태: 생성된 플랜 + 러닝 기록
+  const [plan, setPlan] = useState(null);
+  const [records, setRecords] = useLocalState(KEYS.records, []);
+  const [logPrefill, setLogPrefill] = useState(null);
+  const [logReturn, setLogReturn] = useState("schedule");
+
+  // 마운트 시 저장된 플랜을 복원하고 스케줄 화면으로 진입
+  useEffect(() => {
+    const p = loadPlan();
+    if (p) {
+      setPlan(p);
+      setRecordDist(p.recordDist ?? "k10");
+      setH(p.h ?? ""); setM(p.m ?? ""); setS(p.s ?? "");
+      setWeeklyKm(p.weeklyKm ?? "");
+      setIsRecent(p.isRecent ?? true);
+      setVdot(p.vdot ?? null);
+      setTargetDist(p.targetDist ?? "full");
+      setTargetH(p.targetH ?? ""); setTargetM(p.targetM ?? "");
+      setTargetDate(p.targetDate ?? "");
+      setRunDays(p.runDays ?? 5);
+      setScreen("schedule");
+    }
+  }, []);
+
   function runAssessment() {
     const sec = timeToSec(h, m, s);
     if (sec <= 0) return;
     setVdot(timeToVDOT(DIST_M[recordDist], sec));
     setScreen("result");
+  }
+
+  // 스케줄 생성 + 플랜 영속화 (weeksLeft를 고정해 날짜·비교가 흔들리지 않게 함)
+  function generateSchedule() {
+    const raceDate = new Date(targetDate);
+    const today = new Date();
+    const daysLeft = Math.ceil((raceDate - today) / (1000 * 60 * 60 * 24));
+    const weeksLeft = Math.max(4, Math.ceil(daysLeft / 7));
+    const newPlan = {
+      id: newId(), createdAt: new Date().toISOString(),
+      targetDist, targetH, targetM, targetDate, runDays, weeklyKm,
+      vdot, isRecent, recordDist, h, m, s, weeksLeft,
+    };
+    setPlan(newPlan);
+    savePlan(newPlan);
+    setExpandedWeek(1);
+    setScreen("schedule");
+  }
+
+  function resetAll() {
+    clearPlan();          // 플랜만 삭제 — 기록은 보존
+    setPlan(null);
+    setVdot(null);
+    setScreen("input");
+  }
+
+  function openLog(prefill, returnScreen) {
+    setLogPrefill(prefill || null);
+    setLogReturn(returnScreen || "schedule");
+    setScreen("log");
+  }
+
+  /* ---------- SCREEN: 기록 입력 / 편집 ---------- */
+  if (screen === "log") {
+    return (
+      <LogScreen
+        prefill={logPrefill}
+        records={records}
+        setRecords={setRecords}
+        onDone={() => setScreen(logReturn)}
+      />
+    );
+  }
+
+  /* ---------- SCREEN: 히스토리 ---------- */
+  if (screen === "history") {
+    return (
+      <HistoryScreen
+        records={records}
+        plan={plan}
+        onAdd={() => openLog({ date: toISODate(new Date()) }, "history")}
+        onEdit={(r) => openLog({ id: r.id, date: r.date, distanceKm: r.distanceKm, durationSec: r.durationSec, notes: r.notes, link: r.link }, "history")}
+        onDelete={(id) => setRecords(prev => prev.filter(x => x.id !== id))}
+        onBack={() => setScreen(plan ? "schedule" : "input")}
+      />
+    );
+  }
+
+  /* ---------- SCREEN: 계획 vs 실제 비교 ---------- */
+  if (screen === "compare" && plan) {
+    const { weeks } = buildScheduleFromPlan(plan);
+    return (
+      <CompareScreen
+        weeks={weeks}
+        records={records}
+        plan={plan}
+        onBack={() => setScreen("schedule")}
+        onOpenHistory={() => setScreen("history")}
+      />
+    );
   }
 
   /* ---------- SCREEN 1: 기록 입력 ---------- */
@@ -427,7 +181,6 @@ export default function App() {
             <input value={s} onChange={e => setS(e.target.value.replace(/\D/g, ""))} placeholder="00" maxLength={2} inputMode="numeric" style={inputStyle} />
           </div>
 
-          {/* 최근 vs 역대최고 선택 + 안내 */}
           <label style={labelStyle}>이 기록은?</label>
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
             <button onClick={() => setIsRecent(true)} style={{
@@ -462,8 +215,16 @@ export default function App() {
             cursor: sec > 0 ? "pointer" : "not-allowed",
             background: sec > 0 ? `linear-gradient(135deg, ${ACCENT}, #0891b2)` : "rgba(255,255,255,0.08)",
             color: sec > 0 ? "#06141a" : "#475569", fontSize: 16, fontWeight: 800,
-            boxShadow: sec > 0 ? `0 8px 24px ${ACCENT}44` : "none", marginBottom: 30,
+            boxShadow: sec > 0 ? `0 8px 24px ${ACCENT}44` : "none", marginBottom: 12,
           }}>현재 능력 측정하기 →</button>
+
+          {records.length > 0 && (
+            <button onClick={() => setScreen("history")} style={{
+              width: "100%", padding: 14, borderRadius: 14, marginBottom: 24,
+              border: "1px solid rgba(255,255,255,0.1)", cursor: "pointer",
+              background: "rgba(255,255,255,0.04)", color: "#94a3b8", fontSize: 13, fontWeight: 700,
+            }}>📒 내 러닝 히스토리 ({records.length}회)</button>
+          )}
         </div>
       </Phone>
     );
@@ -471,7 +232,6 @@ export default function App() {
 
   /* ---------- SCREEN 2: 측정 결과 ---------- */
   if (screen === "result") {
-    // 역대최고면 보수적으로 -1.5 보정
     const effVdot = isRecent ? vdot : vdot - 1.5;
     const paces = trainingPaces(effVdot);
     const preds = DIST_OPTIONS.map(d => ({ label: d.label, time: fmtTime(vdotToTime(effVdot, DIST_M[d.key])) }));
@@ -495,10 +255,8 @@ export default function App() {
           {!isRecent && <div style={{ marginTop: 8, fontSize: 11, color: "#fb923c" }}>역대 기록 기준 보수 보정 적용됨</div>}
         </div>
 
-        {/* VDOT 스케일 게이지 (①) */}
         <VdotGauge vdot={effVdot} />
 
-        {/* 등급 기준 표 — 배지/ⓘ 탭 시 펼침 (②) */}
         {levelInfoOpen && (
           <div style={{
             margin: "12px 20px 0", background: "rgba(255,255,255,0.04)",
@@ -507,7 +265,7 @@ export default function App() {
             <div style={{ padding: "12px 16px 8px", fontSize: 12, fontWeight: 700, color: "#94a3b8" }}>
               이 등급은 어떻게 나뉘나요?
             </div>
-            {LEVELS.map((l, i) => {
+            {LEVELS.map((l) => {
               const active = cur.key === l.key;
               return (
                 <div key={l.key} style={{
@@ -562,8 +320,8 @@ export default function App() {
           <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, overflow: "hidden", marginBottom: 28 }}>
             {PACE_META.map((meta, i, a) => {
               const paceSec = paces[meta.key];
-              const vv = vdotToVelocity(effVdot);           // m/min @ 100% vVO2max
-              const pct = (60000 / paceSec) / vv;            // 실제 페이스의 강도 비율
+              const vv = vdotToVelocity(effVdot);
+              const pct = (60000 / paceSec) / vv;
               const open = expandedPace === meta.key;
               return (
                 <div key={meta.key} style={{ borderBottom: i < a.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
@@ -576,7 +334,6 @@ export default function App() {
                         <span style={{ fontSize: 13, color: "#cbd5e1" }}>{meta.n}</span>
                         <span style={{ fontSize: 10, color: "#475569", fontVariantNumeric: "tabular-nums" }}>{Math.round(pct * 100)}%</span>
                       </div>
-                      {/* 강도 막대 */}
                       <div style={{ height: 5, borderRadius: 3, background: "rgba(255,255,255,0.07)", overflow: "hidden" }}>
                         <div style={{ width: `${Math.min(100, pct * 100)}%`, height: "100%", background: meta.c, borderRadius: 3 }} />
                       </div>
@@ -692,7 +449,7 @@ export default function App() {
             </div>
           )}
 
-          <button onClick={() => { setExpandedWeek(1); setScreen("schedule"); }} disabled={!canProceed} style={{
+          <button onClick={generateSchedule} disabled={!canProceed} style={{
             width: "100%", padding: 18, borderRadius: 16, border: "none",
             cursor: canProceed ? "pointer" : "not-allowed",
             background: canProceed ? `linear-gradient(135deg, ${ACCENT}, #0891b2)` : "rgba(255,255,255,0.08)",
@@ -706,21 +463,11 @@ export default function App() {
 
   /* ---------- SCREEN 4: 주차별 전체 스케줄 ---------- */
   if (screen === "schedule") {
-    const effVdot = isRecent ? vdot : vdot - 1.5;
-    const goalSec = timeToSec(targetH, targetM, 0);
-    const needVdot = timeToVDOT(DIST_M[targetDist], goalSec);
-    // 훈련 페이스는 목표와 현재의 중간 지점에서 시작해 목표로 수렴 (간단히 목표 기준)
-    const paces = trainingPaces(needVdot);
-    const targetLabel = TARGET_OPTIONS.find(t => t.key === targetDist).label;
-
-    const raceDate = new Date(targetDate);
-    const today = new Date();
-    const daysLeft = Math.ceil((raceDate - today) / (1000 * 60 * 60 * 24));
-    const weeksLeft = Math.max(4, Math.ceil(daysLeft / 7));
-    const startKm = parseInt(weeklyKm) || 25;
-
-    // useMemo는 조건부(early return 이후)에서 호출하면 Hooks 규칙 위반이므로 일반 호출로 계산
-    const { weeks } = buildWeeklySchedule({ targetDist, vdot: needVdot, paces, weeksLeft, startKm, raceDate, runDays });
+    const activePlan = plan || {
+      targetDist, targetH, targetM, targetDate, runDays, weeklyKm, vdot, isRecent,
+      weeksLeft: Math.max(4, Math.ceil((new Date(targetDate) - new Date()) / (1000 * 60 * 60 * 24 * 7))),
+    };
+    const { weeks, needVdot, paces, targetLabel, daysLeft, weeksLeft } = buildScheduleFromPlan(activePlan);
 
     return (
       <Phone>
@@ -734,7 +481,7 @@ export default function App() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <div>
               <div style={{ fontSize: 11, color: "#64748b" }}>목표</div>
-              <div style={{ fontSize: 19, fontWeight: 900 }}>{targetLabel} {targetH}:{String(targetM).padStart(2, "0")}</div>
+              <div style={{ fontSize: 19, fontWeight: 900 }}>{targetLabel} {activePlan.targetH}:{String(activePlan.targetM).padStart(2, "0")}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#64748b" }}>대회까지</div>
@@ -744,7 +491,7 @@ export default function App() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
             {[
               { v: `${weeksLeft}주`, l: "총 기간" },
-              { v: `주 ${runDays}일`, l: "훈련 빈도" },
+              { v: `주 ${activePlan.runDays}일`, l: "훈련 빈도" },
               { v: needVdot.toFixed(1), l: "목표 VDOT" },
               { v: fmtPace(paces.marathon), l: "레이스 페이스" },
             ].map(x => (
@@ -754,6 +501,14 @@ export default function App() {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* 비교 / 기록 진입 */}
+        <div style={{ display: "flex", gap: 8, padding: "0 16px 12px" }}>
+          <button onClick={() => setScreen("compare")} style={navBtn(ACCENT, true)}>📊 비교 분석</button>
+          <button onClick={() => setScreen("history")} style={navBtn(ACCENT, false)}>
+            📒 기록 {records.length > 0 ? `(${records.length})` : ""}
+          </button>
         </div>
 
         {/* 페이즈 범례 */}
@@ -778,7 +533,6 @@ export default function App() {
                 border: `1px solid ${open ? wk.phase.c + "55" : "rgba(255,255,255,0.06)"}`,
                 background: wk.isRaceWeek ? "rgba(34,211,238,0.06)" : "rgba(255,255,255,0.02)",
               }}>
-                {/* 주차 헤더 */}
                 <button onClick={() => setExpandedWeek(open ? -1 : wk.w)} style={{
                   width: "100%", display: "flex", alignItems: "center", gap: 10,
                   padding: "13px 14px", background: "transparent", border: "none", cursor: "pointer",
@@ -803,25 +557,49 @@ export default function App() {
                   <span style={{ color: "#475569", fontSize: 14, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▾</span>
                 </button>
 
-                {/* 펼친 내용: 요일별 */}
+                {/* 펼친 내용: 요일별 (+ 완료 기록 연동) */}
                 {open && (
                   <div style={{ padding: "0 14px 12px" }}>
                     {wk.days.map((day, i) => {
                       const ks = kindStyle[day.kind];
+                      const canLog = day.k > 0 && day.kind !== "rest" && plan;
+                      const matched = canLog ? recordsForDay(records, plan, wk.w, day.d) : [];
+                      const agg = matched.length ? aggregateRecords(matched) : null;
                       return (
                         <div key={i} style={{
                           display: "grid", gridTemplateColumns: "26px 1fr auto", gap: 10, alignItems: "center",
                           padding: "9px 12px", marginTop: 6, borderRadius: 10,
-                          background: ks.bg, border: `1px solid ${ks.c}22`,
+                          background: ks.bg, border: `1px solid ${agg ? "#34d39955" : ks.c + "22"}`,
                         }}>
                           <span style={{ fontSize: 12, fontWeight: 800, color: "#475569" }}>{day.d}</span>
                           <div>
                             <div style={{ fontSize: 12.5, fontWeight: 600, color: ks.c, lineHeight: 1.4 }}>{day.t}</div>
-                            {day.time && <div style={{ fontSize: 10, color: "#475569", marginTop: 1 }}>{day.time}</div>}
+                            {day.time && !agg && <div style={{ fontSize: 10, color: "#475569", marginTop: 1 }}>{day.time}</div>}
+                            {agg && (
+                              <div style={{ fontSize: 10.5, color: "#34d399", marginTop: 2, fontWeight: 700 }}>
+                                ✓ 실제 {Math.round(agg.distanceKm * 10) / 10}km · {fmtPace(agg.pace)}/km
+                              </div>
+                            )}
                           </div>
-                          <span style={{ fontSize: 12, fontWeight: 800, color: day.k > 0 ? ks.c : "#334155", whiteSpace: "nowrap" }}>
-                            {day.k > 0 ? `${day.k}km` : "휴식"}
-                          </span>
+                          {canLog ? (
+                            agg ? (
+                              <button onClick={() => openLog(editPrefillFor(matched[0]), "schedule")} style={{
+                                fontSize: 11, fontWeight: 800, color: "#34d399", whiteSpace: "nowrap",
+                                background: "rgba(52,211,153,0.12)", border: "1px solid rgba(52,211,153,0.3)",
+                                borderRadius: 8, padding: "5px 9px", cursor: "pointer",
+                              }}>{Math.round((agg.distanceKm / day.k) * 100)}%</button>
+                            ) : (
+                              <button onClick={() => openLog(completePrefillFor(plan, wk.w, day), "schedule")} style={{
+                                fontSize: 11, fontWeight: 700, color: ACCENT, whiteSpace: "nowrap",
+                                background: `${ACCENT}14`, border: `1px solid ${ACCENT}40`,
+                                borderRadius: 8, padding: "5px 9px", cursor: "pointer",
+                              }}>완료 기록</button>
+                            )
+                          ) : (
+                            <span style={{ fontSize: 12, fontWeight: 800, color: day.k > 0 ? ks.c : "#334155", whiteSpace: "nowrap" }}>
+                              {day.k > 0 ? `${day.k}km` : "휴식"}
+                            </span>
+                          )}
                         </div>
                       );
                     })}
@@ -831,13 +609,13 @@ export default function App() {
             );
           })}
 
-          <button onClick={() => { setScreen("input"); setVdot(null); }} style={{
+          <button onClick={resetAll} style={{
             width: "100%", padding: 16, borderRadius: 16, marginTop: 8,
             border: "1px solid rgba(255,255,255,0.1)", cursor: "pointer",
             background: "rgba(255,255,255,0.04)", color: "#94a3b8", fontSize: 14, fontWeight: 700,
           }}>↺ 처음부터 다시 측정</button>
           <p style={{ textAlign: "center", color: "#1e293b", fontSize: 10, marginTop: 14, lineHeight: 1.6 }}>
-            Daniels-Gilbert 공식 기반 추정 · 부상 위험과 실제 컨디션을 항상 우선하세요
+            Daniels-Gilbert 공식 기반 추정 · 부상 위험과 실제 컨디션을 항상 우선하세요 · 기록은 이 브라우저에 저장됩니다
           </p>
         </div>
       </Phone>
@@ -845,4 +623,53 @@ export default function App() {
   }
 
   return null;
+}
+
+/* ====================== 보조 (모듈 스코프) ====================== */
+
+/* 영속 플랜으로부터 스케줄과 표시용 파생값을 재계산 */
+function buildScheduleFromPlan(plan) {
+  const goalSec = timeToSec(plan.targetH, plan.targetM, 0);
+  const needVdot = timeToVDOT(DIST_M[plan.targetDist], goalSec);
+  const paces = trainingPaces(needVdot);
+  const targetLabel = TARGET_OPTIONS.find(t => t.key === plan.targetDist).label;
+
+  const raceDate = new Date(plan.targetDate);
+  const today = new Date();
+  const daysLeft = Math.ceil((raceDate - today) / (1000 * 60 * 60 * 24));
+  const weeksLeft = plan.weeksLeft || Math.max(4, Math.ceil(daysLeft / 7));
+  const startKm = parseInt(plan.weeklyKm) || 25;
+
+  const { weeks } = buildWeeklySchedule({
+    targetDist: plan.targetDist, vdot: needVdot, paces, weeksLeft, startKm, raceDate, runDays: plan.runDays,
+  });
+  return { weeks, needVdot, paces, targetLabel, daysLeft, weeksLeft };
+}
+
+function aggregateRecords(recs) {
+  const distanceKm = recs.reduce((a, r) => a + (r.distanceKm || 0), 0);
+  const durationSec = recs.reduce((a, r) => a + (r.durationSec || 0), 0);
+  return { distanceKm, durationSec, pace: durationSec / distanceKm };
+}
+
+/* 완료 기록(신규) prefill — 해당 훈련일에 연결 */
+function completePrefillFor(plan, week, day) {
+  return {
+    date: toISODate(planDateFor(plan, week, day.d)),
+    distanceKm: day.k,
+    link: { planId: plan.id, week, day: day.d, kind: day.kind },
+  };
+}
+/* 기존 기록 편집 prefill */
+function editPrefillFor(r) {
+  return { id: r.id, date: r.date, distanceKm: r.distanceKm, durationSec: r.durationSec, notes: r.notes, link: r.link };
+}
+
+function navBtn(accent, primary) {
+  return {
+    flex: 1, padding: "11px 8px", borderRadius: 12, cursor: "pointer", fontSize: 13, fontWeight: 800,
+    border: `1px solid ${primary ? accent : "rgba(255,255,255,0.12)"}`,
+    background: primary ? `${accent}1a` : "rgba(255,255,255,0.04)",
+    color: primary ? accent : "#cbd5e1",
+  };
 }
