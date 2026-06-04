@@ -35,6 +35,13 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # 상태관리 — 순수 로직/저장소를 프로바이더로 노출, 테스트 시 override 용이.
+  flutter_riverpod: ^2.6.1
+
+  # 로컬 영속성(Phase 1) — 플랜/기록 JSON 저장(웹 localStorage 대체).
+  # Phase 2에서 GPS track_points용 관계형 DB(drift)로 확장 예정.
+  shared_preferences: ^2.3.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
