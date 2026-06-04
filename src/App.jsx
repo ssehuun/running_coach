@@ -89,6 +89,69 @@ const TARGET_OPTIONS = [
 const ACCENT = "#22d3ee";
 const BG = "#0a0e17";
 
+/* ====================== VDOT 등급 밴드 (앱 자체 기준) ======================
+   게이지 / 등급표 / 배지가 모두 이 한 소스를 공유한다. */
+const LEVELS = [
+  { key: "beginner", name: "입문", min: 0, max: 42, c: "#60a5fa" },
+  { key: "inter", name: "중급", min: 42, max: 48, c: "#34d399" },
+  { key: "upper", name: "중상급", min: 48, max: 54, c: "#fb923c" },
+  { key: "adv", name: "상급", min: 54, max: 999, c: "#f43f5e" },
+];
+const GAUGE_MIN = 30, GAUGE_MAX = 66;
+
+function levelOf(vdot) {
+  return LEVELS.find(l => vdot >= l.min && vdot < l.max) || LEVELS[LEVELS.length - 1];
+}
+/* 등급 경계를 VDOT 범위 문자열로 ("< 42", "42–48", "54+") */
+function levelRangeLabel(l) {
+  if (l.min === 0) return `< ${l.max}`;
+  if (l.max >= 999) return `${l.min}+`;
+  return `${l.min}–${l.max}`;
+}
+/* 등급을 체감 가능한 실제 기록(기본 10K)으로 환산 */
+function levelRaceLabel(l, distM = 10000) {
+  const fast = l.max < 999 ? fmtTime(vdotToTime(l.max, distM)) : null;
+  const slow = l.min > 0 ? fmtTime(vdotToTime(l.min, distM)) : null;
+  if (!slow) return `10K ${fast} 이내`;   // 상급
+  if (!fast) return `10K ${slow}+`;        // 입문
+  return `10K ${fast}–${slow}`;
+}
+
+/* ====================== 훈련 페이스 메타데이터 ======================
+   range: Daniels 권장 강도 범위(참고). pct 막대/숫자는 실제 페이스에서 역산. */
+const PACE_META = [
+  {
+    key: "easy", n: "Easy 이지", c: "#60a5fa", range: "59–74%",
+    purpose: "유산소 기반·모세혈관·미토콘드리아 발달, 회복 촉진",
+    feel: "옆사람과 편하게 대화할 수 있는 강도",
+    when: "회복일·롱런 등 주간 주행량의 대부분",
+  },
+  {
+    key: "marathon", n: "Marathon 마라톤", c: "#f43f5e", range: null,
+    purpose: "글리코겐 효율·레이스 페이스 적응",
+    feel: "편안하지만 집중이 필요한 강도",
+    when: "특화기 롱런 후반·마라톤 페이스 주법",
+  },
+  {
+    key: "threshold", n: "Threshold 템포", c: "#fb923c", range: "~88%",
+    purpose: "젖산역치 향상 — 빠른 페이스를 더 오래 유지",
+    feel: "짧은 문장만 겨우 나오는 '편안하게 힘든' 강도",
+    when: "주 1회 템포런·크루즈 인터벌",
+  },
+  {
+    key: "interval", n: "Interval 인터벌", c: "#facc15", range: "97–100%",
+    purpose: "VO₂max 자극 — 최대 산소섭취 능력 향상",
+    feel: "말하기 거의 불가, 3–5분 반복 후 휴식",
+    when: "특화기 주 1회 (예: 1km 반복)",
+  },
+  {
+    key: "rep", n: "Repetition 레프", c: "#a78bfa", range: "105%+",
+    purpose: "무산소 파워·러닝 이코노미·스피드/폼 개선",
+    feel: "전력에 가까움, 짧고 충분한 휴식",
+    when: "스피드 보강 (예: 200–400m 반복)",
+  },
+];
+
 /* ====================== 주차별 스케줄 생성기 ====================== */
 function buildWeeklySchedule({ targetDist, vdot, paces, weeksLeft, startKm, raceDate }) {
   const peakKm = targetDist === "full" ? 65 : targetDist === "half" ? 50 : 40;
@@ -238,6 +301,44 @@ function StatusBar({ title, onBack }) {
   );
 }
 
+/* VDOT 스케일 게이지: 등급 밴드 위에 사용자 위치를 마커로 표시 */
+function VdotGauge({ vdot }) {
+  const cur = levelOf(vdot);
+  const toPct = (v) => Math.max(0, Math.min(1, (v - GAUGE_MIN) / (GAUGE_MAX - GAUGE_MIN)));
+  const pos = toPct(vdot);
+  return (
+    <div style={{ padding: "6px 24px 2px" }}>
+      {/* 마커 (아래를 가리킴) */}
+      <div style={{ position: "relative", height: 16 }}>
+        <div style={{
+          position: "absolute", left: `${pos * 100}%`, transform: "translateX(-50%)",
+          fontSize: 11, color: "#fff", lineHeight: 1,
+        }}>▼</div>
+      </div>
+      {/* 밴드 막대 */}
+      <div style={{ display: "flex", height: 10, borderRadius: 6, overflow: "hidden" }}>
+        {LEVELS.map(l => {
+          const w = (toPct(Math.min(l.max, GAUGE_MAX)) - toPct(Math.max(l.min, GAUGE_MIN))) * 100;
+          return <div key={l.key} style={{
+            width: `${w}%`, background: l.c, opacity: cur.key === l.key ? 1 : 0.4,
+          }} />;
+        })}
+      </div>
+      {/* 밴드 라벨 */}
+      <div style={{ display: "flex", marginTop: 6 }}>
+        {LEVELS.map(l => {
+          const w = (toPct(Math.min(l.max, GAUGE_MAX)) - toPct(Math.max(l.min, GAUGE_MIN))) * 100;
+          return <div key={l.key} style={{
+            width: `${w}%`, textAlign: "center", fontSize: 10,
+            fontWeight: cur.key === l.key ? 800 : 600,
+            color: cur.key === l.key ? l.c : "#475569",
+          }}>{l.name}</div>;
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [screen, setScreen] = useState("input");
   const [recordDist, setRecordDist] = useState("k10");
@@ -253,6 +354,9 @@ export default function App() {
   const [targetM, setTargetM] = useState("");
   const [targetDate, setTargetDate] = useState("");
   const [expandedWeek, setExpandedWeek] = useState(1);
+  const [levelInfoOpen, setLevelInfoOpen] = useState(false);
+  const [paceHowOpen, setPaceHowOpen] = useState(false);
+  const [expandedPace, setExpandedPace] = useState(null);
 
   function runAssessment() {
     const sec = timeToSec(h, m, s);
@@ -352,7 +456,7 @@ export default function App() {
     const effVdot = isRecent ? vdot : vdot - 1.5;
     const paces = trainingPaces(effVdot);
     const preds = DIST_OPTIONS.map(d => ({ label: d.label, time: fmtTime(vdotToTime(effVdot, DIST_M[d.key])) }));
-    const level = effVdot >= 54 ? "상급" : effVdot >= 48 ? "중상급" : effVdot >= 42 ? "중급" : "입문";
+    const cur = levelOf(effVdot);
 
     return (
       <Phone>
@@ -364,12 +468,47 @@ export default function App() {
             background: `linear-gradient(135deg, ${ACCENT}, #818cf8)`,
             WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
           }}>{effVdot.toFixed(1)}</div>
-          <div style={{
-            display: "inline-block", marginTop: 10, background: `${ACCENT}1a`, color: ACCENT,
-            fontSize: 12, fontWeight: 700, padding: "4px 14px", borderRadius: 100,
-          }}>{level} 러너</div>
+          <button onClick={() => setLevelInfoOpen(o => !o)} style={{
+            display: "inline-flex", alignItems: "center", gap: 5, marginTop: 10, cursor: "pointer",
+            background: `${cur.c}1a`, color: cur.c, border: `1px solid ${cur.c}44`,
+            fontSize: 12, fontWeight: 700, padding: "5px 14px", borderRadius: 100,
+          }}>{cur.name} 러너 <span style={{ fontSize: 11, opacity: 0.8 }}>ⓘ</span></button>
           {!isRecent && <div style={{ marginTop: 8, fontSize: 11, color: "#fb923c" }}>역대 기록 기준 보수 보정 적용됨</div>}
         </div>
+
+        {/* VDOT 스케일 게이지 (①) */}
+        <VdotGauge vdot={effVdot} />
+
+        {/* 등급 기준 표 — 배지/ⓘ 탭 시 펼침 (②) */}
+        {levelInfoOpen && (
+          <div style={{
+            margin: "12px 20px 0", background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, overflow: "hidden",
+          }}>
+            <div style={{ padding: "12px 16px 8px", fontSize: 12, fontWeight: 700, color: "#94a3b8" }}>
+              이 등급은 어떻게 나뉘나요?
+            </div>
+            {LEVELS.map((l, i) => {
+              const active = cur.key === l.key;
+              return (
+                <div key={l.key} style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "10px 16px",
+                  background: active ? `${l.c}12` : "transparent",
+                  borderTop: "1px solid rgba(255,255,255,0.04)",
+                }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 2, background: l.c, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, fontWeight: active ? 800 : 600, color: active ? l.c : "#cbd5e1", width: 48 }}>{l.name}</span>
+                  <span style={{ fontSize: 12, color: "#64748b", width: 64, fontVariantNumeric: "tabular-nums" }}>VDOT {levelRangeLabel(l)}</span>
+                  <span style={{ fontSize: 12, color: "#94a3b8", flex: 1, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{levelRaceLabel(l)}</span>
+                  {active && <span style={{ fontSize: 11, color: l.c, marginLeft: 6 }}>← 당신</span>}
+                </div>
+              );
+            })}
+            <div style={{ padding: "10px 16px", fontSize: 11, lineHeight: 1.6, color: "#475569", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+              ※ 본 앱 자체 기준입니다. VDOT는 기록으로 추정한 현재 체력 지표이며, 경계는 참고용입니다.
+            </div>
+          </div>
+        )}
 
         <div style={{ padding: "20px" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#64748b", marginBottom: 10 }}>거리별 예상 기록</div>
@@ -385,23 +524,65 @@ export default function App() {
             ))}
           </div>
 
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#64748b", marginBottom: 10 }}>맞춤 훈련 페이스 (/km)</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#64748b" }}>맞춤 훈련 페이스 (/km)</span>
+            <button onClick={() => setPaceHowOpen(o => !o)} style={{
+              background: "transparent", border: "none", cursor: "pointer", color: ACCENT,
+              fontSize: 12, fontWeight: 700, padding: 0,
+            }}>어떻게 계산되나요? {paceHowOpen ? "▴" : "▾"}</button>
+          </div>
+          {paceHowOpen && (
+            <div style={{
+              padding: "12px 14px", borderRadius: 12, marginBottom: 12, fontSize: 12, lineHeight: 1.6,
+              background: `${ACCENT}0d`, border: `1px solid ${ACCENT}22`, color: "#94a3b8",
+            }}>
+              각 페이스는 당신의 VDOT로 역산한 <strong style={{ color: "#cbd5e1" }}>최대 능력 속도(vVO₂max)의 비율(%)</strong>로 정해집니다.
+              강도가 낮을수록 느리고 길게, 높을수록 빠르고 짧게 달려 서로 다른 능력을 단련합니다. 각 행을 탭하면 목적·느낌을 볼 수 있어요.
+            </div>
+          )}
           <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, overflow: "hidden", marginBottom: 28 }}>
-            {[
-              { n: "Easy (이지)", p: paces.easy, c: "#60a5fa" },
-              { n: "Marathon (마라톤)", p: paces.marathon, c: "#f43f5e" },
-              { n: "Threshold (템포)", p: paces.threshold, c: "#fb923c" },
-              { n: "Interval (인터벌)", p: paces.interval, c: "#facc15" },
-              { n: "Repetition (레프)", p: paces.rep, c: "#a78bfa" },
-            ].map((row, i, a) => (
-              <div key={row.n} style={{
-                display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 16px",
-                borderBottom: i < a.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
-              }}>
-                <span style={{ fontSize: 13, color: "#cbd5e1" }}>{row.n}</span>
-                <span style={{ fontSize: 16, fontWeight: 800, color: row.c, fontVariantNumeric: "tabular-nums" }}>{fmtPace(row.p)}</span>
-              </div>
-            ))}
+            {PACE_META.map((meta, i, a) => {
+              const paceSec = paces[meta.key];
+              const vv = vdotToVelocity(effVdot);           // m/min @ 100% vVO2max
+              const pct = (60000 / paceSec) / vv;            // 실제 페이스의 강도 비율
+              const open = expandedPace === meta.key;
+              return (
+                <div key={meta.key} style={{ borderBottom: i < a.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                  <button onClick={() => setExpandedPace(open ? null : meta.key)} style={{
+                    width: "100%", display: "flex", alignItems: "center", gap: 12,
+                    padding: "13px 16px", background: "transparent", border: "none", cursor: "pointer",
+                  }}>
+                    <div style={{ flex: 1, textAlign: "left" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
+                        <span style={{ fontSize: 13, color: "#cbd5e1" }}>{meta.n}</span>
+                        <span style={{ fontSize: 10, color: "#475569", fontVariantNumeric: "tabular-nums" }}>{Math.round(pct * 100)}%</span>
+                      </div>
+                      {/* 강도 막대 */}
+                      <div style={{ height: 5, borderRadius: 3, background: "rgba(255,255,255,0.07)", overflow: "hidden" }}>
+                        <div style={{ width: `${Math.min(100, pct * 100)}%`, height: "100%", background: meta.c, borderRadius: 3 }} />
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: meta.c, fontVariantNumeric: "tabular-nums" }}>{fmtPace(paceSec)}</span>
+                    <span style={{ color: "#475569", fontSize: 12, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▾</span>
+                  </button>
+                  {open && (
+                    <div style={{ padding: "2px 16px 14px", display: "grid", gap: 7 }}>
+                      {[
+                        ["강도", `vVO₂max의 ${meta.range ?? Math.round(pct * 100) + "%"}`],
+                        ["목적", meta.purpose],
+                        ["느낌", meta.feel],
+                        ["언제", meta.when],
+                      ].map(([k, v]) => (
+                        <div key={k} style={{ display: "flex", gap: 10, fontSize: 11.5, lineHeight: 1.5 }}>
+                          <span style={{ width: 34, flexShrink: 0, color: "#475569", fontWeight: 700 }}>{k}</span>
+                          <span style={{ color: "#94a3b8" }}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <button onClick={() => setScreen("target")} style={{
