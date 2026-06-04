@@ -153,7 +153,7 @@ const PACE_META = [
 ];
 
 /* ====================== 주차별 스케줄 생성기 ====================== */
-function buildWeeklySchedule({ targetDist, vdot, paces, weeksLeft, startKm, raceDate }) {
+function buildWeeklySchedule({ targetDist, vdot, paces, weeksLeft, startKm, raceDate, runDays = 5 }) {
   const peakKm = targetDist === "full" ? 65 : targetDist === "half" ? 50 : 40;
   const longMax = targetDist === "full" ? 32 : targetDist === "half" ? 24 : 18;
 
@@ -189,7 +189,7 @@ function buildWeeklySchedule({ targetDist, vdot, paces, weeksLeft, startKm, race
     }
     // 회복주(4주마다) 살짝 감량
     if (ph.idx < 2 && w % 4 === 0) vol *= 0.8;
-    vol = Math.round(vol);
+    vol = Math.round(vol * runDays / 5); // 주당 훈련 일수에 비례해 총 주행량 조정
 
     // 롱런 거리
     let longRun;
@@ -239,6 +239,24 @@ function buildWeeklySchedule({ targetDist, vdot, paces, weeksLeft, startKm, race
         { d: "토", t: longDetail, k: longRun, kind: "long", time: "새벽" },
         { d: "일", t: `리커버리 ${fmtPace(addPace(paces.easy, 30))}`, k: ph.idx === 0 ? 6 : 7, kind: "easy", time: "자유" },
       ];
+    }
+
+    // 주당 훈련 일수에 맞춰 요일 조정 (롱런·핵심 훈련 우선 보존, 레이스 주는 그대로)
+    if (!isRaceWeek) {
+      const activePlan = {
+        3: ["화", "목", "토"],            // 인터벌 · 템포 · 롱런
+        4: ["화", "수", "목", "토"],       // + 이지
+        5: ["화", "수", "목", "토", "일"],  // + 리커버리 (기본)
+        6: ["화", "수", "목", "금", "토", "일"], // + 이지(금)
+      }[runDays] || ["화", "수", "목", "토", "일"];
+      const active = new Set(activePlan);
+      days = days.map(day => {
+        if (day.d === "금" && active.has("금"))
+          return { d: "금", t: `이지 ${fmtPace(paces.easy)}`, k: 6, kind: "easy", time: "자유" };
+        if (day.k > 0 && !active.has(day.d))
+          return { d: day.d, t: isRecovery ? "휴식 (회복주)" : "휴식", k: 0, kind: "rest" };
+        return day;
+      });
     }
 
     // 날짜 라벨
@@ -357,6 +375,7 @@ export default function App() {
   const [levelInfoOpen, setLevelInfoOpen] = useState(false);
   const [paceHowOpen, setPaceHowOpen] = useState(false);
   const [expandedPace, setExpandedPace] = useState(null);
+  const [runDays, setRunDays] = useState(5);
 
   function runAssessment() {
     const sec = timeToSec(h, m, s);
@@ -638,6 +657,24 @@ export default function App() {
           <label style={labelStyle}>대회 날짜</label>
           <input type="date" value={targetDate} onChange={e => setTargetDate(e.target.value)} style={{ ...inputStyle, fontSize: 16, marginBottom: 20, colorScheme: "dark", padding: "16px" }} />
 
+          <label style={labelStyle}>주 며칠 달릴 수 있나요?</label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
+            {[3, 4, 5, 6].map(n => (
+              <button key={n} onClick={() => setRunDays(n)} style={{
+                padding: "14px 4px", borderRadius: 14, cursor: "pointer",
+                border: `1px solid ${runDays === n ? ACCENT : "rgba(255,255,255,0.1)"}`,
+                background: runDays === n ? `${ACCENT}1a` : "rgba(255,255,255,0.03)",
+                color: runDays === n ? ACCENT : "#94a3b8", fontSize: 15, fontWeight: 800,
+              }}>{n}일</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.6, marginBottom: 20 }}>
+            {runDays === 3 ? "롱런·템포·인터벌만 — 적게 뛰지만 핵심만 압축 (휴식일로 회복 확보)"
+              : runDays === 4 ? "핵심 3개 + 이지런 1회 — 균형 잡힌 입문~중급용"
+              : runDays === 5 ? "표준 구성 — 이지·회복런까지 포함 (권장)"
+              : "이지런 추가로 주행량 ↑ — 거리 적응에 유리, 회복 관리 필수"}
+          </div>
+
           {gap !== null && (
             <div style={{
               padding: "14px 16px", borderRadius: 14, marginBottom: 20,
@@ -683,7 +720,7 @@ export default function App() {
     const startKm = parseInt(weeklyKm) || 25;
 
     // useMemo는 조건부(early return 이후)에서 호출하면 Hooks 규칙 위반이므로 일반 호출로 계산
-    const { weeks } = buildWeeklySchedule({ targetDist, vdot: needVdot, paces, weeksLeft, startKm, raceDate });
+    const { weeks } = buildWeeklySchedule({ targetDist, vdot: needVdot, paces, weeksLeft, startKm, raceDate, runDays });
 
     return (
       <Phone>
@@ -704,9 +741,10 @@ export default function App() {
               <div style={{ fontSize: 19, fontWeight: 900, color: ACCENT }}>D-{daysLeft > 0 ? daysLeft : 0}</div>
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
             {[
               { v: `${weeksLeft}주`, l: "총 기간" },
+              { v: `주 ${runDays}일`, l: "훈련 빈도" },
               { v: needVdot.toFixed(1), l: "목표 VDOT" },
               { v: fmtPace(paces.marathon), l: "레이스 페이스" },
             ].map(x => (
