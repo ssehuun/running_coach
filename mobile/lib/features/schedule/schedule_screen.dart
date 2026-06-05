@@ -401,9 +401,10 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
     ));
   }
 
-  _Agg _aggregate(List<RunRecord> recs) {
+  _Agg? _aggregate(List<RunRecord> recs) {
     final dist = recs.fold<double>(0, (a, r) => a + r.distanceKm);
     final dur = recs.fold<int>(0, (a, r) => a + r.durationSec);
+    if (!(dist > 0)) return null; // 거리 0/NaN 가드 — pace 무한대 방지
     return _Agg(dist, dur, dur / dist);
   }
 }
