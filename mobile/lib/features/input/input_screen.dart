@@ -8,6 +8,7 @@ import '../../core/state/providers.dart';
 import '../../ui/colors.dart';
 import '../../ui/widgets.dart';
 import '../history/history_screen.dart';
+import '../record_run/record_run_screen.dart';
 import '../result/result_screen.dart';
 
 /// 측정 흐름을 화면 간 전달하는 값 객체.
@@ -78,6 +79,14 @@ class _InputScreenState extends ConsumerState<InputScreen> {
     final records = ref.watch(recordsProvider);
     return Scaffold(
       backgroundColor: bg,
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: accent,
+        foregroundColor: const Color(0xFF06141A),
+        icon: const Icon(Icons.play_arrow),
+        label: const Text('러닝 측정', style: TextStyle(fontWeight: FontWeight.w800)),
+        onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const RecordRunScreen())),
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 32, 20, 24),

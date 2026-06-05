@@ -2,10 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:flutter/material.dart';
 import 'package:running_coach/app.dart';
 import 'package:running_coach/core/models/models.dart';
 import 'package:running_coach/core/state/providers.dart';
 import 'package:running_coach/core/storage/storage.dart';
+import 'package:running_coach/features/record_run/record_run_screen.dart';
 
 Future<void> _pump(WidgetTester tester) async {
   final storage = await Storage.create();
@@ -46,5 +48,17 @@ void main() {
     await _pump(tester);
     expect(find.textContaining('훈련 스케줄'), findsOneWidget);
     expect(find.text('목표 VDOT'), findsOneWidget);
+  });
+
+  testWidgets('러닝 측정 화면이 렌더되고 시작 버튼을 보인다', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = await Storage.create();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [storageProvider.overrideWithValue(storage)],
+      child: const MaterialApp(home: RecordRunScreen()),
+    ));
+    await tester.pump();
+    expect(find.text('측정 시작'), findsOneWidget);
+    expect(find.text('km'), findsOneWidget);
   });
 }
