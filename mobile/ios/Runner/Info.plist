@@ -4,6 +4,16 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- 위치 권한 사용 설명 -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>러닝 거리·페이스·경로를 측정하는 데 위치를 사용합니다.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>화면이 꺼지거나 앱이 백그라운드여도 러닝 측정을 이어가기 위해 위치를 사용합니다.</string>
+	<!-- 백그라운드 위치 업데이트 -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

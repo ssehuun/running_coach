@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/geo/activity_tracker.dart';
 import '../../core/geo/geo.dart';
@@ -45,8 +46,8 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
     final ok = await _service.ensurePermission();
     if (!ok) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('위치 권한이 필요합니다.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('위치 권한과 위치 서비스가 필요합니다. 설정에서 허용해 주세요.')));
       }
       return;
     }
@@ -57,6 +58,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
     _ticker = Timer.periodic(
         const Duration(seconds: 1), (_) => setState(() => _stats = _tracker.stats()));
     await _service.start();
+    await _enableWakelock(true); // 측정 중 화면 꺼짐 방지
     setState(() => _running = true);
   }
 
@@ -69,10 +71,17 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
     setState(() => _stats = _tracker.stats());
   }
 
+  Future<void> _enableWakelock(bool on) async {
+    try {
+      on ? await WakelockPlus.enable() : await WakelockPlus.disable();
+    } catch (_) {/* 미지원 플랫폼 무시 */}
+  }
+
   Future<void> _stop() async {
     await _service.stop();
     await _sub?.cancel();
     _ticker?.cancel();
+    await _enableWakelock(false);
     setState(() => _running = false);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(
@@ -89,6 +98,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
     _sub?.cancel();
     _ticker?.cancel();
     _service.stop();
+    _enableWakelock(false);
     final s = _service;
     if (s is SimulatedLocationService) s.dispose();
     super.dispose();

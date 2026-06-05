@@ -28,15 +28,21 @@
 - ✅ 진입점 — Input·Schedule 화면의 "러닝 측정" 버튼
 - ✅ 테스트 — geo·tracker(직선거리·스파이크/점프 거부·오토포즈·스플릿) + 화면 스모크
 
-### Phase 2b 예정 — 실기기 필요(다음 단계)
+### Phase 2b 진행 — 실제 GPS·권한·백그라운드 설정 (코드 완료, 실기기 검증 필요)
 
-- ⬜ 실제 GPS: `geolocator` + `flutter_foreground_task`(백그라운드·화면 꺼짐) + 권한 온보딩
-- ⬜ Android 매니페스트(FGS `location` 타입·백그라운드 권한)·iOS Info.plist(UIBackgroundModes)
-- ⬜ `drift`(SQLite)로 activities/track_points 영속 + 크래시 복구, 경로 좌표 저장
-- ⬜ Phase 3: 지도(flutter_map + OSM) 경로·상세
+- ✅ 실제 GPS: `GeolocatorLocationService` — Android 포그라운드 서비스 알림 +
+  iOS `allowBackgroundLocationUpdates`로 **화면 꺼져도 측정**(별도 패키지 없이 geolocator로)
+- ✅ 권한 온보딩 `features/onboarding/` (S-10): 전경→알림→"항상 허용" 단계 요청 + 설정 딥링크
+- ✅ 네이티브 설정: AndroidManifest 위치·FGS·알림 권한, iOS Info.plist 위치 사용 문구·UIBackgroundModes
+- ✅ `wakelock_plus`로 측정 중 화면 자동 꺼짐 방지
+- ✅ 권한 인지 진입 라우팅 `run_launcher.dart` (웹=시뮬레이션 / 모바일=권한 보유 시 실 GPS, 없으면 온보딩)
+- ⬜ `drift`(SQLite) activities/track_points 영속 + 크래시 복구(S-11) + 경로 좌표 저장 — 다음 단계
+- ⬜ Phase 3: 지도(flutter_map + OSM) 라이브 경로·상세(S-12)
 
-> 영속성: 현재 플랜/기록은 SharedPreferences(JSON). GPS 경로 좌표가 필요한 Phase 2b에서
-> drift(SQLite)로 전환한다. 현재 측정 결과는 거리·시간 요약만 RunRecord(gps)로 저장된다.
+> 검증: 이 환경에선 `flutter analyze` + 39개 테스트 + 웹 빌드로 컴파일·로직을 확인.
+> 실제 GPS·백그라운드 동작은 **안드로이드/iOS 기기에서 `flutter run`** 으로 확인해야 한다(웹은 시뮬레이션).
+> 영속성: 플랜/기록은 SharedPreferences. 측정 결과는 거리·시간 요약을 RunRecord(gps)로 저장하며,
+> 경로 좌표 저장은 drift 도입(다음 단계)에서 추가한다.
 
 ## 구조
 

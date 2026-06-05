@@ -11,7 +11,7 @@ import '../../ui/colors.dart';
 import '../compare/compare_screen.dart';
 import '../history/history_screen.dart';
 import '../log/log_screen.dart';
-import '../record_run/record_run_screen.dart';
+import '../record_run/run_launcher.dart';
 
 class ScheduleScreen extends ConsumerStatefulWidget {
   const ScheduleScreen({super.key});
@@ -44,8 +44,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
         foregroundColor: const Color(0xFF06141A),
         icon: const Icon(Icons.play_arrow),
         label: const Text('러닝 측정', style: TextStyle(fontWeight: FontWeight.w800)),
-        onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const RecordRunScreen())),
+        onPressed: () => launchRun(context),
       ),
       body: SafeArea(
         child: ListView(

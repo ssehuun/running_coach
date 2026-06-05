@@ -42,6 +42,11 @@ dependencies:
   # Phase 2에서 GPS track_points용 관계형 DB(drift)로 확장 예정.
   shared_preferences: ^2.3.3
 
+  # Phase 2b — 실제 GPS·권한·화면 켜둠.
+  geolocator: ^13.0.1 # 위치 스트림 + 안드로이드 포그라운드 서비스/ iOS 백그라운드
+  permission_handler: ^11.3.1 # 위치·알림 권한 단계 요청
+  wakelock_plus: ^1.2.8 # 측정 중 화면 자동 꺼짐 방지
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
