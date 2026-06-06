@@ -65,3 +65,11 @@ DateTime? _timeAtDistance(List<CumPoint> cum, double target) {
   }
   return null;
 }
+
+/// 리스트를 [maxCount]개로 균등 다운샘플(첫·마지막 항상 포함).
+/// 라이브 지도 폴리라인이 너무 길어질 때 렌더/배터리 부담을 줄인다.
+List<T> downsampleEvenly<T>(List<T> items, int maxCount) {
+  if (maxCount < 2 || items.length <= maxCount) return items;
+  final step = (items.length - 1) / (maxCount - 1);
+  return [for (var i = 0; i < maxCount; i++) items[(i * step).round()]];
+}

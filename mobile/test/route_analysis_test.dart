@@ -43,4 +43,15 @@ void main() {
         ])),
         isEmpty);
   });
+
+  test('downsampleEvenly — 첫·마지막 보존, 개수 제한', () {
+    final src = [for (var i = 0; i < 100; i++) i];
+    final out = downsampleEvenly(src, 10);
+    expect(out.length, 10);
+    expect(out.first, 0);
+    expect(out.last, 99);
+    // 짧은 입력·과도한 한도는 원본 그대로.
+    expect(downsampleEvenly(src, 1000), src);
+    expect(downsampleEvenly([1, 2, 3], 2).length, 2);
+  });
 }

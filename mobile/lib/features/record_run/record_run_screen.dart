@@ -1,12 +1,15 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/db/activity_repository.dart';
 import '../../core/geo/activity_tracker.dart';
 import '../../core/geo/geo.dart';
+import '../../core/geo/route_analysis.dart';
 import '../../core/location/location_service.dart';
 import '../../core/state/providers.dart';
 import '../../core/storage/storage.dart';
@@ -42,8 +45,12 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
   int _tickCount = 0; // 플러시 주기 카운터
   StreamSubscription<TrackPoint>? _sub;
   Timer? _ticker;
+  final MapController _mapController = MapController();
   bool _running = false;
   double _lastAccuracy = 0;
+
+  /// 측정 중이고 좌표가 쌓이면 실시간 지도를 노출한다.
+  bool get _showMap => _running && _tracker.acceptedPoints.isNotEmpty;
   ActivityStats _stats = const ActivityStats(
     distanceKm: 0,
     elapsedSec: 0,
@@ -91,6 +98,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       _tracker.tick(DateTime.now()); // 포인트가 없어도 시계 진행
       setState(() => _stats = _tracker.stats());
+      _followCamera(); // 지도 카메라를 현재 위치로 추종
       if (++_tickCount % 3 == 0) _flush(); // ~3초마다 증분 영속
     });
     await _service.start();
@@ -113,6 +121,17 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
       await _repo.updateTotals(id,
           distanceM: _tracker.distanceKm * 1000, activeSec: st.elapsedSec);
     } catch (_) {/* 영속 실패 무시 */}
+  }
+
+  /// 현재 줌을 유지하며 카메라를 마지막 좌표로 이동한다(지도 미배치 시 무시).
+  void _followCamera() {
+    final pts = _tracker.acceptedPoints;
+    if (pts.isEmpty) return;
+    final last = pts.last;
+    try {
+      _mapController.move(
+          LatLng(last.lat, last.lon), _mapController.camera.zoom);
+    } catch (_) {/* 아직 레이아웃 전 */}
   }
 
   void _togglePause() {
@@ -153,6 +172,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
   void dispose() {
     _sub?.cancel();
     _ticker?.cancel();
+    _mapController.dispose();
     _service.stop();
     _enableWakelock(false);
     final s = _service;
@@ -175,18 +195,22 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              const Spacer(),
+              if (_showMap) ...[
+                Expanded(child: _liveMap()),
+                const SizedBox(height: 16),
+              ] else
+                const Spacer(),
               _gpsBadge(),
-              const SizedBox(height: 24),
+              SizedBox(height: _showMap ? 12 : 24),
               Text(_stats.distanceKm.toStringAsFixed(2),
-                  style: const TextStyle(
-                      fontSize: 84,
+                  style: TextStyle(
+                      fontSize: _showMap ? 48 : 84,
                       fontWeight: FontWeight.w900,
                       height: 1,
                       color: accent)),
               const Text('km',
                   style: TextStyle(fontSize: 16, color: textFaint)),
-              const SizedBox(height: 36),
+              SizedBox(height: _showMap ? 18 : 36),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
@@ -219,11 +243,59 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
                           fontSize: 12)),
                 ),
               ],
-              const Spacer(),
+              if (_showMap) const SizedBox(height: 16) else const Spacer(),
               _controls(),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// 실시간 경로 지도 — 누적 폴리라인 + 현재 위치 마커. 긴 경로는 다운샘플.
+  Widget _liveMap() {
+    final src = _tracker.acceptedPoints;
+    final pts = [
+      for (final p in downsampleEvenly(src, 500)) LatLng(p.lat, p.lon),
+    ];
+    final current = LatLng(src.last.lat, src.last.lon);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: FlutterMap(
+        mapController: _mapController,
+        options: MapOptions(
+          initialCenter: current,
+          initialZoom: 16,
+          interactionOptions: const InteractionOptions(
+            flags: InteractiveFlag.pinchZoom |
+                InteractiveFlag.drag |
+                InteractiveFlag.doubleTapZoom,
+          ),
+        ),
+        children: [
+          TileLayer(
+            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            userAgentPackageName: 'com.runningcoach.app',
+          ),
+          if (pts.length >= 2)
+            PolylineLayer(polylines: [
+              Polyline(points: pts, strokeWidth: 4, color: accent),
+            ]),
+          MarkerLayer(markers: [
+            Marker(
+              point: current,
+              width: 20,
+              height: 20,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: accent,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 3),
+                ),
+              ),
+            ),
+          ]),
+        ],
       ),
     );
   }
