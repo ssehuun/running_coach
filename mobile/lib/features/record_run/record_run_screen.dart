@@ -4,17 +4,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../core/db/activity_repository.dart';
 import '../../core/geo/activity_tracker.dart';
 import '../../core/geo/geo.dart';
 import '../../core/location/location_service.dart';
+import '../../core/state/providers.dart';
+import '../../core/storage/storage.dart';
 import '../../ui/colors.dart';
 import 'run_summary_screen.dart';
 
 /// 실시간 러닝 측정 화면. 기본은 시뮬레이션 위치원(기기 없이도 동작).
 /// 실제 GPS는 LocationService 구현만 교체하면 된다.
+///
+/// 크래시 복구로 진입할 때는 [resumeTracker]/[resumeActivityId]를 주입하면
+/// 저장된 활동을 이어서 측정한다.
 class RecordRunScreen extends ConsumerStatefulWidget {
   final LocationService? service;
-  const RecordRunScreen({super.key, this.service});
+  final ActivityTracker? resumeTracker;
+  final String? resumeActivityId;
+  const RecordRunScreen({
+    super.key,
+    this.service,
+    this.resumeTracker,
+    this.resumeActivityId,
+  });
 
   @override
   ConsumerState<RecordRunScreen> createState() => _RecordRunScreenState();
@@ -22,7 +35,11 @@ class RecordRunScreen extends ConsumerStatefulWidget {
 
 class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
   late final LocationService _service;
-  final _tracker = ActivityTracker();
+  late final ActivityTracker _tracker;
+  late final ActivityRepository _repo;
+  String? _activityId; // 영속 중인 활동 id(시작 시 생성 또는 복구로 주입)
+  int _persistedSeq = 0; // DB에 기록된 좌표 개수(증분 플러시 커서)
+  int _tickCount = 0; // 플러시 주기 카운터
   StreamSubscription<TrackPoint>? _sub;
   Timer? _ticker;
   bool _running = false;
@@ -39,6 +56,15 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
   void initState() {
     super.initState();
     _service = widget.service ?? SimulatedLocationService();
+    _repo = ref.read(activityRepositoryProvider);
+    _tracker = widget.resumeTracker ?? ActivityTracker();
+    _activityId = widget.resumeActivityId;
+    _persistedSeq = widget.resumeTracker?.acceptedPoints.length ?? 0;
+    if (widget.resumeTracker != null) {
+      _stats = _tracker.stats();
+      // 복구 진입은 곧바로 측정을 이어서 시작한다.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+    }
   }
 
   Future<void> _start() async {
@@ -50,6 +76,14 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
       }
       return;
     }
+    // 새 측정이면 활동을 생성한다(복구 진입은 기존 활동을 이어 쓴다).
+    if (_activityId == null) {
+      _activityId = newId();
+      try {
+        await _repo.createActivity(
+            id: _activityId!, startedAt: DateTime.now());
+      } catch (_) {/* 영속 실패는 측정을 막지 않음 */}
+    }
     _sub = _service.positions().listen((p) {
       _tracker.processPoint(p);
       _lastAccuracy = p.accuracy;
@@ -57,10 +91,28 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       _tracker.tick(DateTime.now()); // 포인트가 없어도 시계 진행
       setState(() => _stats = _tracker.stats());
+      if (++_tickCount % 3 == 0) _flush(); // ~3초마다 증분 영속
     });
     await _service.start();
     await _enableWakelock(true); // 측정 중 화면 꺼짐 방지
     setState(() => _running = true);
+  }
+
+  /// 누적 좌표·총계를 DB에 증분 저장한다. 실패는 삼켜 측정에 영향을 주지 않는다.
+  Future<void> _flush() async {
+    final id = _activityId;
+    if (id == null) return;
+    try {
+      final pts = _tracker.acceptedPoints;
+      if (pts.length > _persistedSeq) {
+        await _repo.appendPoints(
+            id, pts.sublist(_persistedSeq), _persistedSeq);
+        _persistedSeq = pts.length;
+      }
+      final st = _tracker.stats();
+      await _repo.updateTotals(id,
+          distanceM: _tracker.distanceKm * 1000, activeSec: st.elapsedSec);
+    } catch (_) {/* 영속 실패 무시 */}
   }
 
   void _togglePause() {
@@ -83,6 +135,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
     await _sub?.cancel();
     _ticker?.cancel();
     await _enableWakelock(false);
+    await _flush(); // 종료 직전 마지막 좌표까지 영속
     setState(() => _running = false);
     if (!mounted) return;
     final st = _tracker.stats();
@@ -91,6 +144,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
         distanceKm: _tracker.distanceKm,
         durationSec: st.elapsedSec,
         splits: _tracker.splits(),
+        activityId: _activityId,
       ),
     ));
   }

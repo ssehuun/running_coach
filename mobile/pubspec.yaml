@@ -47,6 +47,12 @@ dependencies:
   permission_handler: ^11.3.1 # 위치·알림 권한 단계 요청
   wakelock_plus: ^1.2.8 # 측정 중 화면 자동 꺼짐 방지
 
+  # S-11 — GPS 활동·경로 좌표를 관계형 DB(SQLite)에 영속(크래시 복구·경로 저장).
+  # 모바일/데스크톱은 drift+sqlite, 웹은 인메모리 폴백(조건부 import로 drift/ffi 미포함).
+  drift: ^2.20.0
+  sqlite3_flutter_libs: ^0.5.24 # 네이티브 sqlite3 번들(안드로이드/iOS)
+  path_provider: ^2.1.4 # DB 파일 경로(앱 문서 디렉터리)
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -57,6 +63,10 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # drift 코드 생성(.g.dart). 스키마 변경 시 build_runner 재실행.
+  drift_dev: ^2.20.0
+  build_runner: ^2.4.13
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

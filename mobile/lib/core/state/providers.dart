@@ -3,12 +3,19 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../db/activity_repository.dart';
 import '../models/models.dart';
 import '../storage/storage.dart';
 
 /// main()에서 실제 Storage 인스턴스로 override 한다.
 final storageProvider = Provider<Storage>(
   (ref) => throw UnimplementedError('storageProvider must be overridden'),
+);
+
+/// main()에서 플랫폼별 ActivityRepository로 override 한다(GPS 경로 영속).
+final activityRepositoryProvider = Provider<ActivityRepository>(
+  (ref) =>
+      throw UnimplementedError('activityRepositoryProvider must be overridden'),
 );
 
 /// 러닝 기록 목록 — 변경 시 저장소에 즉시 영속.

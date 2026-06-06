@@ -4,12 +4,10 @@
 library;
 
 import 'geo.dart';
+import 'route_analysis.dart';
 
-class LapSplit {
-  final int km;
-  final double paceSec;
-  const LapSplit(this.km, this.paceSec);
-}
+// LapSplit은 route_analysis로 옮겼다. 기존 import 경로 호환을 위해 재노출한다.
+export 'route_analysis.dart' show LapSplit;
 
 class ActivityStats {
   final double distanceKm;
@@ -46,6 +44,30 @@ class ActivityTracker {
     this.maxSegmentSec = 10,
     this.paceWindowSec = 25,
   }) : filter = filter ?? GpsFilter();
+
+  /// 저장된 좌표열로 트래커를 복원한다(크래시 복구 후 이어서 측정).
+  /// 좌표를 재생해 거리/누적을 복원하고, 능동 시간은 저장값으로 시드한다.
+  /// 이후 tick(now)이 자연스럽게 이어지도록 시계 기준점은 초기화한다.
+  factory ActivityTracker.fromPoints(
+    List<TrackPoint> points, {
+    required int activeSec,
+    GpsFilter? filter,
+    int maxSegmentSec = 10,
+    int paceWindowSec = 25,
+  }) {
+    final tr = ActivityTracker(
+      filter: filter,
+      maxSegmentSec: maxSegmentSec,
+      paceWindowSec: paceWindowSec,
+    );
+    for (final p in points) {
+      tr.processPoint(p);
+    }
+    tr._activeMs = activeSec * 1000;
+    tr._startTs = null; // 다음 tick에서 현재 시각으로 재기준 → 시간 점프 방지
+    tr._lastTickTs = null;
+    return tr;
+  }
 
   bool get paused => _paused;
   double get distanceKm => _distanceM / 1000.0;
@@ -110,34 +132,6 @@ class ActivityTracker {
     );
   }
 
-  List<LapSplit> splits() {
-    if (_cum.length < 2) return [];
-    final res = <LapSplit>[];
-    final totalM = _cum.last.dist;
-    DateTime prevBoundaryTs = _cum.first.ts;
-    var km = 1;
-    while (km * 1000 <= totalM) {
-      final ts = _timeAtDistance((km * 1000).toDouble());
-      if (ts == null) break;
-      res.add(LapSplit(km, ts.difference(prevBoundaryTs).inMilliseconds / 1000.0));
-      prevBoundaryTs = ts;
-      km++;
-    }
-    return res;
-  }
-
-  DateTime? _timeAtDistance(double target) {
-    for (var i = 1; i < _cum.length; i++) {
-      final a = _cum[i - 1];
-      final b = _cum[i];
-      if (b.dist >= target && a.dist <= target) {
-        final span = b.dist - a.dist;
-        if (span <= 0) return b.ts;
-        final frac = (target - a.dist) / span;
-        final dtMs = b.ts.difference(a.ts).inMilliseconds * frac;
-        return a.ts.add(Duration(milliseconds: dtMs.round()));
-      }
-    }
-    return null;
-  }
+  /// km별 스플릿 — 누적거리 시계열을 공유 순수 함수로 계산한다.
+  List<LapSplit> splits() => computeSplits(_cum);
 }

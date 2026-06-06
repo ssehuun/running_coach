@@ -14,11 +14,13 @@ class RunSummaryScreen extends ConsumerWidget {
   final double distanceKm;
   final int durationSec;
   final List<LapSplit> splits;
+  final String? activityId; // 영속된 활동(경로 저장) 연결
   const RunSummaryScreen({
     super.key,
     required this.distanceKm,
     required this.durationSec,
     required this.splits,
+    this.activityId,
   });
 
   @override
@@ -77,20 +79,47 @@ class RunSummaryScreen extends ConsumerWidget {
             ],
             PrimaryButton(
               label: '기록 저장',
-              onPressed: () {
-                ref.read(recordsProvider.notifier).add(RunRecord(
-                      id: newId(),
-                      date: toISODate(DateTime.now()),
-                      distanceKm: double.parse(distanceKm.toStringAsFixed(2)),
-                      durationSec: durationSec,
-                      source: 'gps',
-                    ));
-                Navigator.of(context).popUntil((r) => r.isFirst);
+              onPressed: () async {
+                final dist = double.parse(distanceKm.toStringAsFixed(2));
+                final record = RunRecord(
+                  id: newId(),
+                  date: toISODate(DateTime.now()),
+                  distanceKm: dist,
+                  durationSec: durationSec,
+                  source: 'gps',
+                  activityId: activityId,
+                );
+                ref.read(recordsProvider.notifier).add(record);
+                final id = activityId;
+                if (id != null) {
+                  try {
+                    await ref.read(activityRepositoryProvider).finishActivity(
+                          id,
+                          recordId: record.id,
+                          endedAt: DateTime.now(),
+                          distanceM: distanceKm * 1000,
+                          activeSec: durationSec,
+                        );
+                  } catch (_) {/* 영속 실패 무시 */}
+                }
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((r) => r.isFirst);
+                }
               },
             ),
             const SizedBox(height: 10),
             TextButton(
-              onPressed: () => Navigator.of(context).popUntil((r) => r.isFirst),
+              onPressed: () async {
+                final id = activityId;
+                if (id != null) {
+                  try {
+                    await ref.read(activityRepositoryProvider).discard(id);
+                  } catch (_) {/* 영속 실패 무시 */}
+                }
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((r) => r.isFirst);
+                }
+              },
               child: const Text('저장 안 함',
                   style: TextStyle(color: textFaint)),
             ),

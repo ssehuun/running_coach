@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/state/providers.dart';
 import 'features/input/input_screen.dart';
+import 'features/recovery/recovery_gate.dart';
 import 'features/schedule/schedule_screen.dart';
 import 'ui/colors.dart';
 
@@ -27,7 +28,7 @@ class RunningCoachApp extends StatelessWidget {
           fontFamily: 'Noto Sans KR',
         ),
       ),
-      home: const HomeGate(),
+      home: const RecoveryGate(child: HomeGate()),
     );
   }
 }

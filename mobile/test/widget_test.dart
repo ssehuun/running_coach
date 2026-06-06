@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/material.dart';
 import 'package:running_coach/app.dart';
+import 'package:running_coach/core/db/repository_memory.dart';
 import 'package:running_coach/core/models/models.dart';
 import 'package:running_coach/core/state/providers.dart';
 import 'package:running_coach/core/storage/storage.dart';
@@ -12,7 +13,11 @@ import 'package:running_coach/features/record_run/record_run_screen.dart';
 Future<void> _pump(WidgetTester tester) async {
   final storage = await Storage.create();
   await tester.pumpWidget(ProviderScope(
-    overrides: [storageProvider.overrideWithValue(storage)],
+    overrides: [
+      storageProvider.overrideWithValue(storage),
+      activityRepositoryProvider
+          .overrideWithValue(InMemoryActivityRepository()),
+    ],
     child: const RunningCoachApp(),
   ));
   await tester.pumpAndSettle();
@@ -54,7 +59,11 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final storage = await Storage.create();
     await tester.pumpWidget(ProviderScope(
-      overrides: [storageProvider.overrideWithValue(storage)],
+      overrides: [
+        storageProvider.overrideWithValue(storage),
+        activityRepositoryProvider
+            .overrideWithValue(InMemoryActivityRepository()),
+      ],
       child: const MaterialApp(home: RecordRunScreen()),
     ));
     await tester.pump();
