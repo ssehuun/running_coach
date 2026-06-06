@@ -28,6 +28,15 @@ void main() {
     return pts;
   }
 
+  test('포인트가 없어도 tick으로 경과 시간이 흐른다 (정지/시뮬레이터 버그 회귀)', () {
+    final tr = ActivityTracker();
+    tr.tick(at(0));
+    tr.tick(at(1));
+    tr.tick(at(2));
+    tr.tick(at(3));
+    expect(tr.stats().elapsedSec, 3);
+  });
+
   test('직선 주행 거리·이동시간 누적', () {
     final tr = ActivityTracker();
     for (final p in straight(speed: 4, seconds: 30)) {

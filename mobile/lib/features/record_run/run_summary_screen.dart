@@ -12,18 +12,18 @@ import '../../ui/widgets.dart';
 /// 측정 종료 후 요약 — 저장(gps RunRecord) 또는 폐기.
 class RunSummaryScreen extends ConsumerWidget {
   final double distanceKm;
-  final int movingSec;
+  final int durationSec;
   final List<LapSplit> splits;
   const RunSummaryScreen({
     super.key,
     required this.distanceKm,
-    required this.movingSec,
+    required this.durationSec,
     required this.splits,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final avgPace = distanceKm > 0 ? movingSec / distanceKm : null;
+    final avgPace = distanceKm > 0 ? durationSec / distanceKm : null;
     return Scaffold(
       backgroundColor: bg,
       appBar: AppBar(
@@ -52,7 +52,7 @@ class RunSummaryScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 20),
             Row(children: [
-              _stat('이동 시간', fmtTime(movingSec)),
+              _stat('시간', fmtTime(durationSec)),
               const SizedBox(width: 10),
               _stat('평균 페이스', avgPace != null ? '${fmtPace(avgPace)}/km' : '—'),
             ]),
@@ -82,7 +82,7 @@ class RunSummaryScreen extends ConsumerWidget {
                       id: newId(),
                       date: toISODate(DateTime.now()),
                       distanceKm: double.parse(distanceKm.toStringAsFixed(2)),
-                      durationSec: movingSec,
+                      durationSec: durationSec,
                       source: 'gps',
                     ));
                 Navigator.of(context).popUntil((r) => r.isFirst);

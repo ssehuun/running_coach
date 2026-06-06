@@ -1,16 +1,16 @@
-/// 러닝 활동 추적 엔진 — TrackPoint 스트림을 받아 거리·이동시간·페이스·오토포즈를
-/// 누적한다. 순수 Dart(시계 의존 없음: 시간은 포인트의 ts로만 진행) → 단위 테스트 가능.
+/// 러닝 활동 추적 엔진 — TrackPoint(거리)와 시계(시간)를 분리해 누적한다.
+/// 시간은 벽시계(tick)와 포인트 ts 양쪽으로 진행하므로, 정지/희소 샘플링(시뮬레이터·
+/// distanceFilter)에도 경과 시간이 멈추지 않는다. 순수 Dart(주입된 시각으로만 진행) → 테스트 가능.
 library;
 
 import 'geo.dart';
 
 class LapSplit {
   final int km;
-  final double paceSec; // 해당 km 구간 소요(초)
+  final double paceSec;
   const LapSplit(this.km, this.paceSec);
 }
 
-/// 외부에서 읽는 라이브 스냅샷.
 class ActivityStats {
   final double distanceKm;
   final int movingSec;
@@ -31,8 +31,8 @@ class ActivityStats {
 class ActivityTracker {
   final GpsFilter filter;
   final int autoPauseSec; // 정지 지속 이 시간 이상이면 자동 일시정지
-  final int maxSegmentSec; // 신호 끊김 시 구간 시간 상한(이동시간 부풀림 방지)
-  final int paceWindowSec; // 현재 페이스 계산 윈도
+  final int maxSegmentSec; // 한 번에 더할 시간 상한(타이머 중단 후 점프 방지)
+  final int paceWindowSec; // 현재 페이스 윈도
 
   double _distanceM = 0;
   int _movingMs = 0;
@@ -40,11 +40,11 @@ class ActivityTracker {
   bool _manualPaused = false;
 
   DateTime? _startTs;
-  DateTime? _lastRawTs;
-  DateTime? _lastMoveTs;
+  DateTime? _lastTickTs; // 시계가 마지막으로 진행한 시각
+  DateTime? _lastMoveTs; // 마지막으로 '이동'이 감지된 시각
 
-  /// (ts, 누적거리m) — 현재 페이스 윈도·스플릿 계산용.
   final List<({DateTime ts, double dist})> _cum = [];
+  final List<TrackPoint> _accepted = [];
 
   ActivityTracker({
     GpsFilter? filter,
@@ -56,54 +56,72 @@ class ActivityTracker {
   bool get paused => _manualPaused || _autoPaused;
   double get distanceKm => _distanceM / 1000.0;
   List<TrackPoint> get acceptedPoints => _accepted;
-  final List<TrackPoint> _accepted = [];
 
   void pause() => _manualPaused = true;
   void resume() {
     _manualPaused = false;
     _autoPaused = false;
-    _lastMoveTs = _lastRawTs;
+    _lastMoveTs = _lastTickTs;
   }
 
+  /// UI 타이머가 매초 호출 — 포인트가 없어도 경과 시간을 진행시킨다.
+  void tick(DateTime now) => _advance(now);
+
   void processPoint(TrackPoint p) {
+    final d = filter.add(p);
+    _startTs ??= _initAt(p.ts);
+
+    if (_manualPaused) {
+      _advance(p.ts); // 경과 시간은 흐르되 거리·이동시간은 동결
+      return;
+    }
+    if (d.accepted && d.reason == FilterReason.firstPoint) {
+      _advance(p.ts, moving: true);
+      _accepted.add(p);
+      _cum.add((ts: p.ts, dist: 0));
+      return;
+    }
+    if (d.accepted && d.reason == FilterReason.accepted) {
+      _advance(p.ts, moving: true);
+      _distanceM += d.deltaMeters;
+      _accepted.add(p);
+      _cum.add((ts: p.ts, dist: _distanceM));
+    } else {
+      _advance(p.ts); // tooClose/lowAccuracy/tooFast → 거리 미반영
+    }
+  }
+
+  DateTime _initAt(DateTime now) {
+    _lastTickTs = now;
+    _lastMoveTs = now;
+    return now;
+  }
+
+  void _advance(DateTime now, {bool moving = false}) {
     if (_startTs == null) {
-      _startTs = p.ts;
-      _lastRawTs = p.ts;
-      _lastMoveTs = p.ts;
-      final d = filter.add(p);
-      if (d.accepted) {
-        _accepted.add(p);
-        _cum.add((ts: p.ts, dist: 0));
+      _startTs = _initAt(now);
+      if (moving) _lastMoveTs = now;
+      return;
+    }
+    final dtMs = now.difference(_lastTickTs!).inMilliseconds;
+    if (dtMs <= 0) {
+      if (moving) {
+        _autoPaused = false;
+        _lastMoveTs = now;
       }
       return;
     }
-
-    final dtMs = p.ts.difference(_lastRawTs!).inMilliseconds;
-    _lastRawTs = p.ts;
-    final segMs = dtMs.clamp(0, maxSegmentSec * 1000);
-    final dec = filter.add(p);
-
-    if (_manualPaused) {
-      // 수동 일시정지: 거리·시간 모두 미반영(필터 상태만 진행해 재개 시 점프 방지).
-      return;
-    }
-
-    if (dec.accepted && dec.reason == FilterReason.accepted) {
-      _distanceM += dec.deltaMeters;
-      _movingMs += segMs;
-      _lastMoveTs = p.ts;
+    if (moving) {
       _autoPaused = false;
-      _accepted.add(p);
-      _cum.add((ts: p.ts, dist: _distanceM));
-    } else if (dec.reason == FilterReason.tooClose) {
-      // 제자리 지터 → 정지 판단.
-      final stillMs = p.ts.difference(_lastMoveTs!).inMilliseconds;
-      if (stillMs >= autoPauseSec * 1000) _autoPaused = true;
-      if (!_autoPaused) _movingMs += segMs;
-    } else {
-      // 정확도 미달·점프 등 버려진 점: 정지로 보지 않고 시간만 흐름.
-      if (!_autoPaused) _movingMs += segMs;
+    } else if (!_manualPaused &&
+        now.difference(_lastMoveTs!).inMilliseconds >= autoPauseSec * 1000) {
+      _autoPaused = true;
     }
+    _lastTickTs = now;
+    if (!paused) {
+      _movingMs += dtMs.clamp(0, maxSegmentSec * 1000);
+    }
+    if (moving) _lastMoveTs = now;
   }
 
   double? _currentPace() {
@@ -112,9 +130,7 @@ class ActivityTracker {
     final cutoff = last.ts.subtract(Duration(seconds: paceWindowSec));
     var ref = _cum.first;
     for (final s in _cum) {
-      if (s.ts.isAfter(cutoff) || s.ts == cutoff) {
-        break;
-      }
+      if (s.ts.isAfter(cutoff)) break;
       ref = s;
     }
     final distM = last.dist - ref.dist;
@@ -124,9 +140,9 @@ class ActivityTracker {
   }
 
   ActivityStats stats() {
-    final elapsedSec = _startTs == null
+    final elapsedSec = (_startTs == null || _lastTickTs == null)
         ? 0
-        : _lastRawTs!.difference(_startTs!).inSeconds;
+        : _lastTickTs!.difference(_startTs!).inSeconds;
     final movingSec = _movingMs ~/ 1000;
     final km = distanceKm;
     return ActivityStats(
@@ -139,7 +155,6 @@ class ActivityTracker {
     );
   }
 
-  /// 완료된 km 구간별 페이스. 누적거리에서 km 경계 시각을 선형 보간해 산출.
   List<LapSplit> splits() {
     if (_cum.length < 2) return [];
     final res = <LapSplit>[];
@@ -147,8 +162,7 @@ class ActivityTracker {
     DateTime prevBoundaryTs = _startTs!;
     var km = 1;
     while (km * 1000 <= totalM) {
-      final target = (km * 1000).toDouble();
-      final ts = _timeAtDistance(target);
+      final ts = _timeAtDistance((km * 1000).toDouble());
       if (ts == null) break;
       res.add(LapSplit(km, ts.difference(prevBoundaryTs).inMilliseconds / 1000.0));
       prevBoundaryTs = ts;

@@ -55,8 +55,10 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
       _tracker.processPoint(p);
       _lastAccuracy = p.accuracy;
     });
-    _ticker = Timer.periodic(
-        const Duration(seconds: 1), (_) => setState(() => _stats = _tracker.stats()));
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      _tracker.tick(DateTime.now()); // 포인트가 없어도 시계 진행
+      setState(() => _stats = _tracker.stats());
+    });
     await _service.start();
     await _enableWakelock(true); // 측정 중 화면 꺼짐 방지
     setState(() => _running = true);
@@ -84,10 +86,11 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
     await _enableWakelock(false);
     setState(() => _running = false);
     if (!mounted) return;
+    final st = _tracker.stats();
     Navigator.of(context).pushReplacement(MaterialPageRoute(
       builder: (_) => RunSummaryScreen(
         distanceKm: _tracker.distanceKm,
-        movingSec: _tracker.stats().movingSec,
+        durationSec: st.elapsedSec,
         splits: _tracker.splits(),
       ),
     ));
@@ -134,7 +137,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  _metric('이동 시간', _fmtDuration(_stats.movingSec)),
+                  _metric('시간', _fmtDuration(_stats.elapsedSec)),
                   _metric(
                       '현재 페이스',
                       _stats.currentPaceSecPerKm != null
