@@ -8,6 +8,7 @@ import '../../core/state/providers.dart';
 import '../../ui/colors.dart';
 import '../../ui/widgets.dart';
 import '../log/log_screen.dart';
+import '../run_detail/run_detail_screen.dart';
 
 class HistoryScreen extends ConsumerWidget {
   const HistoryScreen({super.key});
@@ -70,6 +71,7 @@ class HistoryScreen extends ConsumerWidget {
     final linked = r.link != null && plan != null && r.link!.planId == plan.id;
     final stale = r.link != null && plan != null && r.link!.planId != plan.id;
     final pace = recordPace(r);
+    final hasRoute = r.source == 'gps' && r.activityId != null;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: CardBox(
@@ -77,18 +79,26 @@ class HistoryScreen extends ConsumerWidget {
         child: Row(
           children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Text('${_trim(r.distanceKm)}km',
-                        style: const TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w800)),
-                    const SizedBox(width: 8),
-                    Text(
-                        '${fmtTime(r.durationSec)} · ${pace != null ? fmtPace(pace) : '—'}/km',
-                        style: const TextStyle(fontSize: 12, color: textDim)),
-                  ]),
+              child: InkWell(
+                onTap: hasRoute ? () => _openDetail(context, r) : null,
+                borderRadius: BorderRadius.circular(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      if (hasRoute) ...[
+                        const Icon(Icons.map_outlined,
+                            size: 14, color: accent),
+                        const SizedBox(width: 5),
+                      ],
+                      Text('${_trim(r.distanceKm)}km',
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w800)),
+                      const SizedBox(width: 8),
+                      Text(
+                          '${fmtTime(r.durationSec)} · ${pace != null ? fmtPace(pace) : '—'}/km',
+                          style: const TextStyle(fontSize: 12, color: textDim)),
+                    ]),
                   const SizedBox(height: 3),
                   Row(children: [
                     Text(r.date,
@@ -104,14 +114,15 @@ class HistoryScreen extends ConsumerWidget {
                       const Text(' · 자유 러닝',
                           style: TextStyle(fontSize: 11, color: textGhost)),
                   ]),
-                  if (r.notes.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 3),
-                      child: Text(r.notes,
-                          style:
-                              const TextStyle(fontSize: 11, color: textGhost)),
-                    ),
-                ],
+                    if (r.notes.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text(r.notes,
+                            style: const TextStyle(
+                                fontSize: 11, color: textGhost)),
+                      ),
+                  ],
+                ),
               ),
             ),
             IconButton(
@@ -127,6 +138,12 @@ class HistoryScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  void _openDetail(BuildContext context, RunRecord r) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => RunDetailScreen(record: r),
+    ));
   }
 
   void _openLog(BuildContext context, RunRecord? r) {

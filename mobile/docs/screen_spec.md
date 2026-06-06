@@ -3,6 +3,9 @@
 > 본 문서는 네이티브(Flutter) 러닝 코치 앱의 **전 화면 설계 명세**다.
 > Phase 1(훈련 플래너·수동 기록), Phase 2(GPS 실시간 측정), Phase 3(지도·경로 상세)를 모두 포함한다.
 > 구현 상태 표기: ✅ 구현됨 · 🔵 일부 구현 · ⬜ 설계만(미구현)
+>
+> **최근 업데이트**: S-11(크래시 복구·GPS 경로 영속), S-12(경로 지도 상세) 구현 완료.
+> GPS 활동/좌표는 drift(SQLite)에 영속(모바일·데스크톱), 웹은 인메모리 폴백.
 
 - 플랫폼: iOS · Android (Phase 1·2a는 웹/데스크톱에서도 동작)
 - 화면 크기 기준: 모바일 세로(360–430dp 폭)
@@ -22,11 +25,11 @@
 | S-05 | 비교 분석 (Compare, 4탭) | 1 | ✅ |
 | S-06 | 히스토리 (History) | 1 | ✅ |
 | S-07 | 기록 입력/편집 (Log) | 1 | ✅ |
-| S-08 | 러닝 측정 (Record Run) | 2 | 🔵 (시뮬레이션 동작, 실 GPS 미연결) |
-| S-09 | 측정 요약 (Run Summary) | 2 | 🔵 (요약·저장 동작, 지도 없음) |
-| S-10 | 권한 온보딩 (Onboarding) | 2b | ⬜ |
-| S-11 | 측정 복구 다이얼로그 (Recovery) | 2b | ⬜ |
-| S-12 | 러닝 상세 (Run Detail, 지도+스플릿) | 3 | ⬜ |
+| S-08 | 러닝 측정 (Record Run) | 2 | ✅ (실 GPS·WakeLock·크래시 안전 영속) |
+| S-09 | 측정 요약 (Run Summary) | 2 | ✅ (요약·저장·활동 연결; 지도 미리보기 없음) |
+| S-10 | 권한 온보딩 (Onboarding) | 2b | ✅ |
+| S-11 | 측정 복구 다이얼로그 (Recovery) | 2b | ✅ |
+| S-12 | 러닝 상세 (Run Detail, 지도+스플릿) | 3 | ✅ |
 | C-01 | 라이브 지도 컴포넌트 (Record Run 내) | 3 | ⬜ |
 
 ---
@@ -111,9 +114,9 @@
                 ├─ "처음부터 다시" ─(plan삭제)─▶ HomeGate ▶ S-01
                 └─ FAB "러닝 측정" ─▶ S-08 Record Run
  S-08 Record Run ─종료─▶ (pushReplacement) S-09 Run Summary ─저장/폐기─▶ (popUntil) Home
- (Phase 2b) 앱 시작 시 미완료 활동 발견 ─▶ S-11 Recovery 다이얼로그
- (Phase 2b) S-08 첫 진입·권한 없음 ─▶ S-10 Onboarding
- (Phase 3) S-06 History / S-09 Summary ─기록 탭─▶ S-12 Run Detail (지도)
+ 앱 시작 시 미완료 활동 발견 ─▶ S-11 Recovery 다이얼로그 ─이어서─▶ S-08 재개
+ S-08 첫 진입·권한 없음 ─▶ S-10 Onboarding
+ S-06 History ─gps 기록 탭─▶ S-12 Run Detail (지도+스플릿)
 ```
 
 **HomeGate 규칙** (`app.dart`): `planProvider`가 null이면 S-01, 있으면 S-04. 플랜 생성/삭제 시 자동 전환.
@@ -129,11 +132,21 @@
 | `RecordLink` | planId, week, day(월~일), kind |
 | `ScheduleWeek` | w, phase, vol, longRun, days[], isRaceWeek, isRecovery, dateLabel, dMinus |
 | `DayPlan` | d, t(설명), k(km), kind, paceSec?, time? |
-| `TrackPoint` (2) | lat, lon, ts, accuracy, altitude? |
-| `Activity` (2b) | id, status(in_progress/done/discarded), startedAt, distanceKm, movingSec, polyline |
-| `LapSplit` (2) | km, paceSec |
+| `TrackPoint` (2) | lat, lon, ts, accuracy, altitude? — `core/geo/geo.dart` |
+| `ActivityRow` (2b) | id, status(in_progress/done/discarded), startedAt, endedAt?, distanceM, activeSec, recordId? — `core/db/activity_repository.dart` |
+| `LapSplit` (2) | km, paceSec — `core/geo/route_analysis.dart` |
 
 페이스는 저장하지 않고 항상 파생: `durationSec / distanceKm`.
+
+**GPS 영속 스키마 (drift, `core/db/app_database.dart`)**
+
+| 테이블 | 컬럼 |
+|--------|------|
+| `activities` | id(pk), status, startedAt(ms), endedAt(ms)?, distanceM, activeSec, recordId? |
+| `track_points` | id(autoinc), activityId(fk), seq, ts(ms), lat, lon, accuracy, altitude? — index(activityId, seq) |
+
+저장된 `RunRecord.activityId` ↔ `activities.recordId`로 기록과 경로를 양방향 연결한다.
+스플릿/누적거리는 저장하지 않고 `track_points`에서 `route_analysis`로 파생한다.
 
 ---
 
@@ -354,9 +367,9 @@
 | 요소 | 규칙 |
 |------|------|
 | 정렬 | 날짜 내림차순 |
-| 배지 | 현재 플랜 연결(accent) / 이전 계획(회색) / 자유 러닝(고스트) / **gps 출처 아이콘**(Phase 2 확장 권장) |
+| 배지 | 현재 플랜 연결(accent) / 이전 계획(회색) / 자유 러닝(고스트) |
+| gps 기록 | 거리 앞 지도 아이콘(accent) + 카드 탭 → S-12 Run Detail (✅) |
 | 편집/삭제 | ✎ → S-07 편집, 🗑 → `recordsProvider.remove` (즉시) |
-| (Phase 3) | gps 기록 탭 → S-12 Run Detail |
 
 **엣지** 0건 → 빈 상태 안내. **개선** 삭제 확인 다이얼로그(§8).
 
@@ -388,7 +401,7 @@
 
 ---
 
-### S-08 · 러닝 측정 (Record Run) 🔵 — `features/record_run/record_run_screen.dart`
+### S-08 · 러닝 측정 (Record Run) ✅ — `features/record_run/record_run_screen.dart`
 
 **목적** GPS로 실시간 거리·시간·페이스를 측정한다. **(Phase 2 핵심)**
 
@@ -413,20 +426,23 @@
 
 | 요소 | 데이터/규칙 |
 |------|-------------|
-| 위치원 | `LocationService` 주입(기본 `SimulatedLocationService`; 2b에서 geolocator로 교체) |
+| 위치원 | `LocationService` 주입 — 웹/테스트 `SimulatedLocationService`, 모바일 `GeolocatorLocationService`(`run_launcher.dart`가 권한 보유 시 선택, 없으면 S-10) |
 | 엔진 | `ActivityTracker` — `processPoint` 누적, `stats()` 1초마다 갱신 |
 | 거리 | Haversine 누적(필터 통과분) |
-| 페이스 | 현재=최근 25s 윈도, 평균=movingSec/거리 |
+| 페이스 | 현재=최근 25s 윈도, 평균=activeSec/거리 |
 | GPS 뱃지 | 마지막 accuracy ≤20m 초록, 그 외 주황, 검색중 회색 |
-| 일시정지 | 수동(버튼) + 자동(정지 12s) — 거리/시간 동결 |
-| 종료 | 서비스 stop → S-09 |
+| 일시정지 | 수동(버튼) — 거리/시간 동결(자동 일시정지는 제거됨) |
+| **영속** | 시작 시 `createActivity`(in_progress), ~3초마다 누적 좌표·총계 증분 플러시(`appendPoints`/`updateTotals`), 종료 시 최종 플러시 → 크래시 시 손실 ≤3초 |
+| **복구 재개** | `resumeTracker`/`resumeActivityId` 주입 시 저장 좌표로 트래커 복원 후 같은 활동을 이어서 측정(S-11) |
+| 종료 | 서비스 stop → S-09(activityId 전달) |
 
-**상태** 대기/진행/일시정지. **엣지** 권한 거부 시 스낵바.
-**2b 추가**: 화면 켜둠(WakeLock) · 포그라운드 알림(라이브 스탯) · 화면 꺼져도 측정(백그라운드 서비스) · 크래시 안전 영속(포인트마다 DB 기록).
+**상태** 대기/진행/일시정지. **엣지** 권한 거부 시 스낵바. 영속 실패는 삼켜 측정에 영향 없음.
+**구현됨**: 실 GPS(geolocator) · 화면 켜둠(WakeLock) · 크래시 안전 영속(drift).
+**미구현(C-01)**: 라이브 경로 지도 · 포그라운드 알림 · 백그라운드 측정.
 
 ---
 
-### S-09 · 측정 요약 (Run Summary) 🔵 — `features/record_run/run_summary_screen.dart`
+### S-09 · 측정 요약 (Run Summary) ✅ — `features/record_run/run_summary_screen.dart`
 
 **목적** 측정 종료 후 결과를 보여주고 `gps` 기록으로 저장한다.
 
@@ -449,11 +465,11 @@
 
 | 요소 | 규칙 |
 |------|------|
-| 스플릿 | `ActivityTracker.splits()` (완성 km만), 최속 구간 accent |
-| 저장 | `RunRecord(source:'gps', distanceKm, durationSec=movingSec, date=오늘)` → History/Compare 반영 |
-| 폐기 | 저장 없이 Home |
+| 스플릿 | `ActivityTracker.splits()`(→ `route_analysis.computeSplits`), 공용 `SplitList` 위젯(`ui/split_list.dart`)로 렌더 |
+| 저장 | `RunRecord(source:'gps', distanceKm, durationSec=activeSec, activityId)` 추가 + `finishActivity`(활동 done·recordId 연결) → History/Compare 반영 |
+| 폐기 | `discard`(활동·좌표 삭제) 후 Home |
 
-**3b/3 확장**: 경로 지도 미리보기 · 플랜 훈련일 연결 선택(link) · 메모 추가 · S-12로 이동.
+**확장 여지**: 경로 지도 미리보기 · 플랜 훈련일 연결 선택(link) · 메모 추가. 저장된 기록은 History에서 S-12로 열람.
 
 ---
 
@@ -492,35 +508,37 @@
 
 ---
 
-### S-11 · 측정 복구 다이얼로그 (Recovery) ⬜ [Phase 2b]
+### S-11 · 측정 복구 다이얼로그 (Recovery) ✅ [Phase 2b] — `features/recovery/recovery_gate.dart`
 
 **목적** 앱이 측정 중 종료/크래시된 경우, 미완료 활동을 복구한다.
 
-**진입** 앱 시작 시 `activities`에 `in_progress` 존재 · **이탈** → 선택에 따라 S-08/S-09/삭제
+**진입** 앱 시작 시 `RecoveryGate`(= `app.dart`의 `home`이 `HomeGate`를 감쌈)가
+첫 프레임 후 `inProgressActivity()` 조회 · **이탈** → 선택에 따라 S-08/저장/삭제
 
 ```
 ┌──────────────────────────────┐
-│ 진행 중이던 측정이 있어요       │
-│ 4.1km · 24:30 (오늘 07:12 시작) │
-│ [ 이어서 측정 ][ 저장 ][ 폐기 ] │
+│ 진행 중이던 러닝이 있어요       │
+│ 4.10 km · 24:30                │
+│ [ 폐기 ][ 저장 ][ 이어서 측정 ] │
 └──────────────────────────────┘
 ```
 
 | 선택 | 동작 |
 |------|------|
-| 이어서 | 트래커에 기존 누적 로드 → S-08 재개 |
-| 저장 | 현재까지로 gps 기록 생성 → S-09 |
-| 폐기 | 활동 `discarded`, track_points 삭제 |
+| 이어서 측정 | `pointsFor`로 좌표 로드 → `ActivityTracker.fromPoints(activeSec)`로 복원 → S-08 재개(같은 activityId, 플랫폼별 위치원) |
+| 저장 | 마지막 플러시된 총계로 gps `RunRecord` 생성 + `finishActivity` |
+| 폐기 | `discard`(활동·track_points 삭제) |
 
-**근거** 포인트마다 DB 기록(crash-safe)이므로 마지막 1점 외 손실 없음.
+**근거** ~3초마다 DB에 증분 기록(crash-safe)이므로 손실은 마지막 플러시 이후(≤3초)뿐.
+조회/처리 실패는 조용히 무시해 앱 진입을 막지 않는다.
 
 ---
 
-### S-12 · 러닝 상세 (Run Detail) ⬜ [Phase 3] — `features/run_detail/`
+### S-12 · 러닝 상세 (Run Detail) ✅ [Phase 3] — `features/run_detail/run_detail_screen.dart`
 
 **목적** 한 번의 GPS 러닝을 지도 경로·요약·km 스플릿으로 상세히 본다.
 
-**진입** S-06/S-09에서 gps 기록 탭 · **이탈** ← 뒤로, 편집/삭제
+**진입** S-06 History에서 gps 기록(지도 아이콘) 탭 · **이탈** ← 뒤로
 
 ```
 ┌──────────────────────────────┐
@@ -530,21 +548,21 @@
 │ │              ◉end          │ │
 │ └────────────────────────────┘ │
 │ [거리 10.2][시간 53:10][평균 5:12]│
-│ [고도 ↑120m](선택)             │
-│ 구간별 스플릿                   │
+│ 구간별 페이스 (km)              │
 │  1km 5:05 ▓▓▓▓▓▓▓             │
 │  …                            │
-│ [플랜 훈련일 연결] [✎ 편집][🗑]  │
 └──────────────────────────────┘
 ```
 
 | 요소 | 데이터/규칙 |
 |------|-------------|
-| 지도 | `track_points`/인코디드 폴리라인 → `PolylineLayer`, 시작/끝 마커, 경로에 맞춰 카메라 fit |
-| 요약 | 거리·이동시간·평균페이스·(고도) |
-| 스플릿 | km 경계 보간(`splits()` 로직 재사용), 최속/최저 강조 |
-| 연결 | 이 기록을 특정 플랜 주/요일 훈련에 link |
-| 삭제 | 기록 + 활동 + track_points 일괄 삭제(확인) |
+| 데이터 | `pointsFor(record.activityId)`를 `FutureBuilder`로 비동기 로드 |
+| 지도 | `flutter_map` + OSM 타일(`userAgentPackageName` 지정), `PolylineLayer`(accent), 시작(초록)/끝(적색) 마커, `CameraFit.bounds`로 경로 맞춤 |
+| 요약 | 거리·이동시간·평균페이스(`RunRecord`에서 파생) |
+| 스플릿 | `computeSplits(cumulativeDistances(points))` → 공용 `SplitList`(최속 강조) |
+| 엣지 | 좌표 0~1개(웹 새로고침·짧은 러닝)면 지도 대신 "저장된 경로가 없습니다" 안내, 요약/스플릿은 표시 |
+
+**미구현 여지**: 고도 그래프 · 플랜 훈련일 연결 · 상세 화면 내 편집/삭제(현재 History 카드에서 처리).
 
 ---
 
@@ -567,9 +585,18 @@ S-08 상단에 실시간 경로 지도를 삽입.
 | `planProvider` | `Plan?` | SharedPreferences `rc.plan.v1` |
 | `recordsProvider` | `List<RunRecord>` | SharedPreferences `rc.records.v1` |
 | `storageProvider` | `Storage` | main()에서 override |
-| (2b) activities/track_points | drift(SQLite) | 경로·진행중 활동 |
+| `activityRepositoryProvider` | `ActivityRepository` | main()에서 override — drift(모바일) / 인메모리(웹) |
 
-**전환 계획** GPS 경로 좌표가 필요한 Phase 2b 시점에 활동/트랙은 drift로, 플랜/기록은 그대로 SharedPreferences 유지(또는 함께 drift 이관 검토).
+**저장소 구성** 플랜·기록(JSON)은 SharedPreferences 유지. GPS 활동·좌표는
+관계형 데이터가 필요하므로 drift(SQLite)로 분리 영속한다.
+
+**멀티플랫폼(웹 컴파일 유지)** `ActivityRepository`는 추상 인터페이스이고,
+`createActivityRepository()`가 조건부 import(`if (dart.library.ffi)`)로 구현을 고른다:
+- 네이티브(모바일/데스크톱/VM): `repository_drift.dart` — drift + `NativeDatabase`(앱 문서 디렉터리의 `running_coach.sqlite`)
+- 웹: `repository_memory.dart` — 인메모리(새로고침 시 사라짐, 동작/빌드는 보장)
+
+이 분기로 웹 빌드 그래프는 `drift/native`·`dart:ffi`를 절대 포함하지 않는다(`flutter build web` 검증).
+drift 스키마 변경 시 `dart run build_runner build`로 `app_database.g.dart` 재생성(커밋 대상).
 
 ---
 
@@ -599,20 +626,23 @@ S-08 상단에 실시간 경로 지도를 삽입.
 - 로딩: 현재 동기 계산이라 별도 로딩 없음. drift 도입 시 비동기 로딩/에러 상태 추가.
 
 ### §8 개선 백로그(설계 보강 권장)
-1. 파괴적 액션(기록 삭제·측정 폐기·플랜 초기화) **확인 다이얼로그** 추가.
-2. History 카드에 **gps/manual 출처 아이콘** 표기.
-3. S-09에서 **플랜 훈련일 연결·메모** 입력 지원.
-4. 측정 화면 **WakeLock**(화면 자동 꺼짐 방지) — 2b 필수.
+1. 파괴적 액션(기록 삭제·플랜 초기화) **확인 다이얼로그** 추가. (측정 폐기는 S-09/복구에서 명시적 선택)
+2. ~~History 카드에 gps 출처 아이콘 + 상세 진입~~ ✅ 완료(S-06/S-12).
+3. S-09/S-12에서 **플랜 훈련일 연결·메모** 입력 지원.
+4. ~~측정 화면 WakeLock~~ ✅ 완료. ~~크래시 안전 영속~~ ✅ 완료(drift 증분 플러시).
 5. 다크 외 라이트 테마/시스템 테마 대응(선택).
+6. **C-01 라이브 지도** · 백그라운드 측정 · 포그라운드 알림(다음 단계).
 
 ---
 
 ## 8. 화면 ↔ Phase 구현 매핑 요약
 
-| Phase | 신규/변경 화면 |
-|-------|----------------|
-| 1 | S-01~S-07 (전부 ✅) |
-| 2a | S-08·S-09 (🔵 시뮬레이션), geo/tracker 코어 |
-| 2b | S-10 온보딩, S-11 복구, S-08 실 GPS·백그라운드·WakeLock·알림, drift 영속 |
-| 3 | S-12 경로 상세, C-01 라이브 지도, S-06/S-09 지도 연계 |
+| Phase | 신규/변경 화면 | 상태 |
+|-------|----------------|------|
+| 1 | S-01~S-07, geo/tracker 코어 | ✅ |
+| 2a | S-08·S-09 시뮬레이션 측정·요약 | ✅ |
+| 2b | S-10 온보딩, S-08 실 GPS·WakeLock | ✅ |
+| 2b | S-11 복구 + drift 영속(activities/track_points)·증분 플러시 | ✅ |
+| 3 | S-12 경로 지도 상세, S-06 gps 탭 연계 | ✅ |
+| 3 | C-01 라이브 지도, 백그라운드 측정·포그라운드 알림 | ⬜ |
 ```

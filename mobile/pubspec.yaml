@@ -53,6 +53,10 @@ dependencies:
   sqlite3_flutter_libs: ^0.5.24 # 네이티브 sqlite3 번들(안드로이드/iOS)
   path_provider: ^2.1.4 # DB 파일 경로(앱 문서 디렉터리)
 
+  # S-12 — 저장된 GPS 경로를 지도로 표시(OSM 타일). 웹/모바일 공통 동작.
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

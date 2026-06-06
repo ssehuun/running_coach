@@ -7,6 +7,7 @@ import '../../core/models/models.dart';
 import '../../core/state/providers.dart';
 import '../../core/storage/storage.dart';
 import '../../ui/colors.dart';
+import '../../ui/split_list.dart';
 import '../../ui/widgets.dart';
 
 /// 측정 종료 후 요약 — 저장(gps RunRecord) 또는 폐기.
@@ -61,20 +62,7 @@ class RunSummaryScreen extends ConsumerWidget {
             const SizedBox(height: 20),
             if (splits.isNotEmpty) ...[
               const SectionLabel('구간별 페이스 (km)'),
-              CardBox(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    for (var i = 0; i < splits.length; i++)
-                      _splitRow(splits[i],
-                          last: i == splits.length - 1,
-                          fastest: splits[i].paceSec ==
-                              splits
-                                  .map((s) => s.paceSec)
-                                  .reduce((a, b) => a < b ? a : b)),
-                  ],
-                ),
-              ),
+              SplitList(splits),
               const SizedBox(height: 24),
             ],
             PrimaryButton(
@@ -140,45 +128,4 @@ class RunSummaryScreen extends ConsumerWidget {
           ]),
         ),
       );
-
-  Widget _splitRow(LapSplit s, {required bool last, required bool fastest}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-      decoration: BoxDecoration(
-        border: last
-            ? null
-            : Border(
-                bottom: BorderSide(color: Colors.white.withValues(alpha: 0.04))),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-              width: 40,
-              child: Text('${s.km}km',
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: textDim))),
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: LinearProgressIndicator(
-                value: (180 / s.paceSec).clamp(0.2, 1).toDouble(),
-                minHeight: 6,
-                backgroundColor: Colors.white.withValues(alpha: 0.06),
-                valueColor: AlwaysStoppedAnimation(
-                    fastest ? accent : const Color(0xFF60A5FA)),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Text('${fmtPace(s.paceSec)}/km',
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: fastest ? accent : Colors.white)),
-        ],
-      ),
-    );
-  }
 }
