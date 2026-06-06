@@ -29,7 +29,6 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
   double _lastAccuracy = 0;
   ActivityStats _stats = const ActivityStats(
     distanceKm: 0,
-    movingSec: 0,
     elapsedSec: 0,
     paused: false,
     currentPaceSecPerKm: null,
