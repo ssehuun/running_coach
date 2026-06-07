@@ -16,6 +16,9 @@ abstract class LocationService {
 
   Future<void> start();
   Future<void> stop();
+
+  /// 자원 정리(스트림/타이머). 기본은 무동작.
+  void dispose() {}
 }
 
 /// 시뮬레이션 위치 — 기기 없이(웹·테스트 포함) 전체 흐름을 구동한다.
@@ -84,6 +87,7 @@ class SimulatedLocationService implements LocationService {
     _timer = null;
   }
 
+  @override
   void dispose() {
     _timer?.cancel();
     _controller.close();

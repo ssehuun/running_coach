@@ -79,6 +79,7 @@ class GeolocatorLocationService implements LocationService {
     _sub = null;
   }
 
+  @override
   void dispose() {
     _sub?.cancel();
     _controller.close();

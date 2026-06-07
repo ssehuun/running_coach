@@ -5,7 +5,8 @@
 > 구현 상태 표기: ✅ 구현됨 · 🔵 일부 구현 · ⬜ 설계만(미구현)
 >
 > **최근 업데이트**: S-11(크래시 복구·GPS 경로 영속), S-12(경로 지도 상세),
-> C-01(측정 중 실시간 경로 지도) 구현 완료. 남은 ⬜는 백그라운드 측정·포그라운드 알림뿐.
+> C-01(측정 중 실시간 경로 지도), **백그라운드 측정**(측정 엔진을 화면에서 분리한
+> 앱 수명 컨트롤러 + geolocator 포그라운드 서비스/iOS 백그라운드) 구현 완료.
 > GPS 활동/좌표는 drift(SQLite)에 영속(모바일·데스크톱), 웹은 인메모리 폴백.
 
 - 플랫폼: iOS · Android (Phase 1·2a는 웹/데스크톱에서도 동작)
@@ -428,6 +429,9 @@
 | 요소 | 데이터/규칙 |
 |------|-------------|
 | 위치원 | `LocationService` 주입 — 웹/테스트 `SimulatedLocationService`, 모바일 `GeolocatorLocationService`(`run_launcher.dart`가 권한 보유 시 선택, 없으면 S-10) |
+| **엔진 위치** | 측정 엔진(트래커·구독·1초 틱·증분 영속)은 화면이 아니라 **앱 수명 컨트롤러 `activeRunProvider`**(`active_run_controller.dart`)에 있다. 화면은 그 위의 뷰일 뿐 |
+| **뒤로가기/백그라운드** | 화면을 벗어나도(뒤로가기) 컨트롤러가 계속 측정. 실제 백그라운드 지속은 geolocator의 포그라운드 서비스(Android, 상시 알림)·백그라운드 업데이트(iOS)가 담당. 종료는 "종료" 버튼으로만 |
+| **복귀 배너** | 측정 중 홈/스케줄로 나가면 `RecoveryGate`가 하단에 "측정 중 N.NN km · 시간 — 돌아가기" 배너 노출, 탭하면 측정 화면 복귀 |
 | 엔진 | `ActivityTracker` — `processPoint` 누적, `stats()` 1초마다 갱신 |
 | 거리 | Haversine 누적(필터 통과분) |
 | 페이스 | 현재=최근 25s 윈도, 평균=activeSec/거리 |
@@ -440,8 +444,9 @@
 | **라이브 지도(C-01)** | 측정 중 좌표가 쌓이면 상단에 실시간 경로 지도 노출(거리 수치는 84→48로 축소). 누적 폴리라인 성장 + 현재 위치 마커, 1초마다 카메라가 현재 위치 추종(줌 유지) |
 
 **상태** 대기/진행/일시정지. **엣지** 권한 거부 시 스낵바. 영속 실패는 삼켜 측정에 영향 없음.
-**구현됨**: 실 GPS(geolocator) · 화면 켜둠(WakeLock) · 크래시 안전 영속(drift) · 라이브 지도(C-01).
-**미구현**: 포그라운드 알림 · 백그라운드(화면 꺼짐) 측정 — 네이티브 서비스 작업으로 별도 진행.
+**구현됨**: 실 GPS(geolocator) · 화면 켜둠(WakeLock) · 크래시 안전 영속(drift) · 라이브 지도(C-01)
+· **백그라운드 측정**(앱 수명 컨트롤러 + 포그라운드 서비스/iOS 백그라운드) · 복귀 배너.
+**검증 주의**: 백그라운드 지속(화면 꺼짐·앱 전환)은 OS 동작이라 **실기기에서만** 확인 가능.
 
 ---
 
@@ -590,6 +595,7 @@
 | `recordsProvider` | `List<RunRecord>` | SharedPreferences `rc.records.v1` |
 | `storageProvider` | `Storage` | main()에서 override |
 | `activityRepositoryProvider` | `ActivityRepository` | main()에서 override — drift(모바일) / 인메모리(웹) |
+| `activeRunProvider` | `ActiveRunState` | 앱 수명 측정 컨트롤러(화면과 분리, 백그라운드 지속) |
 
 **저장소 구성** 플랜·기록(JSON)은 SharedPreferences 유지. GPS 활동·좌표는
 관계형 데이터가 필요하므로 drift(SQLite)로 분리 영속한다.
@@ -616,6 +622,10 @@ drift 스키마 변경 시 `dart run build_runner build`로 `app_database.g.dart
 
 **공통** 측정은 사용자가 시작할 때만(무음 백그라운드 수집 금지). 종료 시 서비스·WakeLock 해제.
 
+**구현 상태** AndroidManifest에 위 권한·`foregroundServiceType`이 선언돼 있고,
+`GeolocatorLocationService`가 `foregroundNotificationConfig`(Android)·`allowBackgroundLocationUpdates`(iOS)로
+백그라운드 스트림을 유지한다. 측정 엔진은 `activeRunProvider`(앱 수명)에 있어 화면 종료와 무관하게 지속된다.
+
 ---
 
 ## 7. 공통 규칙 · 개선 항목(§8)
@@ -635,7 +645,8 @@ drift 스키마 변경 시 `dart run build_runner build`로 `app_database.g.dart
 3. S-09/S-12에서 **플랜 훈련일 연결·메모** 입력 지원.
 4. ~~측정 화면 WakeLock~~ ✅ 완료. ~~크래시 안전 영속~~ ✅ 완료(drift 증분 플러시).
 5. 다크 외 라이트 테마/시스템 테마 대응(선택).
-6. ~~C-01 라이브 지도~~ ✅ 완료. **백그라운드(화면 꺼짐) 측정 + 포그라운드 알림**(네이티브 서비스, 다음 단계).
+6. ~~C-01 라이브 지도~~ ✅ · ~~백그라운드 측정 + 포그라운드 알림~~ ✅ 완료(실기기 검증 권장).
+7. 측정 중 "종료" 확인 다이얼로그(실수로 종료 방지) — 선택.
 
 ---
 
@@ -649,5 +660,5 @@ drift 스키마 변경 시 `dart run build_runner build`로 `app_database.g.dart
 | 2b | S-11 복구 + drift 영속(activities/track_points)·증분 플러시 | ✅ |
 | 3 | S-12 경로 지도 상세, S-06 gps 탭 연계 | ✅ |
 | 3 | C-01 라이브 지도(측정 중 실시간 경로) | ✅ |
-| 3+ | 백그라운드(화면 꺼짐) 측정·포그라운드 알림 | ⬜ |
+| 3+ | 백그라운드 측정(앱 수명 컨트롤러 분리)·포그라운드 알림·복귀 배너 | ✅ |
 ```

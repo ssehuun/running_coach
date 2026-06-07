@@ -16,6 +16,7 @@ import '../../core/models/models.dart';
 import '../../core/state/providers.dart';
 import '../../core/storage/storage.dart';
 import '../../ui/colors.dart';
+import '../record_run/active_run_controller.dart';
 import '../record_run/record_run_screen.dart';
 
 class RecoveryGate extends ConsumerStatefulWidget {
@@ -114,7 +115,71 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
   }
 
   @override
-  Widget build(BuildContext context) => widget.child;
+  Widget build(BuildContext context) {
+    final run = ref.watch(activeRunProvider);
+    return Stack(
+      children: [
+        widget.child,
+        // 측정 중 화면을 벗어나도 측정은 계속된다 — 돌아갈 배너를 항상 노출.
+        if (run.active)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 12,
+            child: SafeArea(child: _ResumeBar(run: run)),
+          ),
+      ],
+    );
+  }
+}
+
+/// 측정 진행 중임을 알리고 탭하면 측정 화면으로 복귀하는 하단 배너.
+class _ResumeBar extends StatelessWidget {
+  final ActiveRunState run;
+  const _ResumeBar({required this.run});
+
+  @override
+  Widget build(BuildContext context) {
+    final km = run.stats.distanceKm.toStringAsFixed(2);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const RecordRunScreen())),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: accent,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              Icon(run.stats.paused ? Icons.pause : Icons.directions_run,
+                  color: const Color(0xFF06141A), size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  run.stats.paused
+                      ? '일시정지됨 · $km km'
+                      : '측정 중 · $km km · ${fmtTime(run.stats.elapsedSec)}',
+                  style: const TextStyle(
+                      color: Color(0xFF06141A),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14),
+                ),
+              ),
+              const Text('돌아가기',
+                  style: TextStyle(
+                      color: Color(0xFF06141A),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 enum _RecoveryChoice { resume, save, discard }
