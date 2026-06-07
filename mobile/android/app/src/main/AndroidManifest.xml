@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 지도 타일·네트워크 (release 빌드에도 필요) -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- 위치 측정(전경) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>

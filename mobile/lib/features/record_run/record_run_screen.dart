@@ -210,7 +210,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
                       color: accent)),
               const Text('km',
                   style: TextStyle(fontSize: 16, color: textFaint)),
-              SizedBox(height: _showMap ? 18 : 36),
+              SizedBox(height: _showMap ? 14 : 36),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
@@ -243,7 +243,7 @@ class _RecordRunScreenState extends ConsumerState<RecordRunScreen> {
                           fontSize: 12)),
                 ),
               ],
-              if (_showMap) const SizedBox(height: 16) else const Spacer(),
+              if (_showMap) const SizedBox(height: 12) else const Spacer(),
               _controls(),
             ],
           ),
